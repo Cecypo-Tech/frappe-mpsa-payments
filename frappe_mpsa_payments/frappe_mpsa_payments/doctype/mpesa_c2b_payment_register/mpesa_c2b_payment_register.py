@@ -54,11 +54,10 @@ class MpesaC2BPaymentRegister(Document):
             self.transamount,
             self.currency,
             self.mode_of_payment,
+            "Customer",
             self.posting_date,
-
             self.name,
             self.posting_date,
-            
             None,
             self.submit_payment,
         )
@@ -119,20 +118,22 @@ class MpesaC2BPaymentRegister(Document):
         if not billrefnumber:
             return
 
-        customer_from_invoice = frappe.get_value(
-            "Sales Invoice",
-            {"name": billrefnumber, "docstatus": 1},
-            "customer"
-        )
+        sources = [
+            ("Sales Invoice", "customer", {"docstatus": 1}),
+            ("Sales Order", "customer", {"docstatus": 1}),
+            ("Quotation", "party_name", {"docstatus": 1, "quotation_to": "Customer"}),
+            ("Customer", "name", {})
+        ]
 
-        if customer_from_invoice:
-            self.customer = customer_from_invoice
-            return
+        for doctype, customer_field, extra_filters in sources:
+            filters = {"name": billrefnumber}
+            filters.update(extra_filters)
 
-        customer = frappe.get_value(
-            "Customer",
-            {"name": billrefnumber},
-            "name"
-        )    
-        if customer:
-            self.customer = customer
+            customer = frappe.db.get_value(
+                doctype,
+                filters,
+                customer_field
+            )
+            if customer:
+                self.customer = customer
+                return
