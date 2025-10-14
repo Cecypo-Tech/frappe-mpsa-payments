@@ -57,7 +57,10 @@ fixtures = [
 
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}
-doctype_js = {"Sales Invoice": "public/js/sales_invoice.js"}
+doctype_js = {
+    "Sales Invoice": "public/js/sales_invoice.js",
+    "Payment Request": "public/js/payment_request.js",
+}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -165,7 +168,7 @@ doctype_js = {"Sales Invoice": "public/js/sales_invoice.js"}
 scheduler_events = {
     "cron": {
         "*/15 * * * *": [
-            "frappe_mpsa_payments.utils.helpers.update_b2c_disbursement_statuses"
+            "frappe_mpsa_payments.services.b2c_scheduler_service.update_b2c_disbursement_statuses"
         ]
     }
 }
@@ -245,4 +248,3 @@ scheduler_events = {
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
-
