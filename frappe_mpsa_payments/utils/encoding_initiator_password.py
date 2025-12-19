@@ -1,9 +1,9 @@
-import frappe
 import base64
+
+import frappe
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from datetime import datetime
+
 
 def generate_security_credential(initiator_password: str, certificate_path: str) -> str:
     """
@@ -13,7 +13,7 @@ def generate_security_credential(initiator_password: str, certificate_path: str)
     try:
         # Retrieve the File document from Frappe
         file_doc = frappe.get_doc("File", {"file_url": certificate_path})
-        
+
         # Construct the absolute path
         full_path = file_doc.get_full_path()
 
@@ -32,7 +32,7 @@ def generate_security_credential(initiator_password: str, certificate_path: str)
         # Encrypt the Base64-encoded password using RSA (PKCS#1 v1.5)
         encrypted_data = public_key.encrypt(
             initiator_password.encode("utf-8"),
-            padding.PKCS1v15()  # Use PKCS#1.5 padding (not OAEP)
+            padding.PKCS1v15(),  # Use PKCS#1.5 padding (not OAEP)
         )
 
         # Convert encrypted bytes to a Base64 string

@@ -1,11 +1,11 @@
+import re
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Generator
+from urllib.parse import urlparse
 
-import re
 import frappe
 from frappe import _
-from urllib.parse import urlparse
 from frappe.utils import get_request_site_address
 
 from .doctype_names import ACCESS_TOKENS_DOCTYPE, MPESA_EXPRESS_REQUEST_DOCTYPE
@@ -174,9 +174,7 @@ def handle_successful_transaction(
     if request_doc.reference_doctype == "Payment Request":
         payment_request = frappe.get_doc("Payment Request", request_doc.reference_name)
         if payment_request.reference_doctype == "Sales Invoice":
-            invoice = frappe.get_doc(
-                "Sales Invoice", payment_request.reference_name
-            )
+            invoice = frappe.get_doc("Sales Invoice", payment_request.reference_name)
             if invoice.docstatus == 0:
                 try:
                     invoice.submit()

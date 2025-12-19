@@ -17,8 +17,8 @@ from ..base_connector import (
 
 
 class Baseurl(Enum):
-    SANDBOX_URL = "https://api.connect.stanbicbank.co.ke/api/sandbox"
-    LIVE_URL = "https://api.connect.stanbicbank.co.ke/api/sandbox"
+    SANDBOX_URL = "https://sandbox.connect.stanbicbank.co.ke/api/sandbox"
+    LIVE_URL = "https://sandbox.connect.stanbicbank.co.ke/api/sandbox"
 
 
 class StanbicConnector(BaseAPIConnector, B2CConnector):

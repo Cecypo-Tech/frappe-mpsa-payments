@@ -1,20 +1,18 @@
-import unittest
-from unittest.mock import patch, Mock
-import json
+from unittest.mock import Mock, patch
+
 from frappe.tests.utils import FrappeTestCase
 
-from frappe_mpsa_payments.api.m_pesa_api import (
-    get_token,
+from .m_pesa_api import (
     confirmation,
-    validation,
+    get_mpesa_draft_c2b_payments,
     get_mpesa_mode_of_payment,
-    get_mpesa_draft_payments,
+    get_token,
     submit_mpesa_payment,
+    validation,
 )
 
 
 class TestMPesaAPI(FrappeTestCase):
-    
     @patch("requests.get")
     def test_get_token(self, mock_get):
         mock_response = Mock()
@@ -73,13 +71,13 @@ class TestMPesaAPI(FrappeTestCase):
         self.assertEqual(modes_of_payment, ["Cash"])
 
     @patch("frappe.get_all")
-    def test_get_mpesa_draft_payments(self, mock_get_all):
+    def test_get_mpesa_draft_c2b_payments(self, mock_get_all):
         mock_get_all.return_value = [{"name": "MP001", "amount": 100.0}]
 
         company = "Test Company"
         mode_of_payment = "Cash"
 
-        payments = get_mpesa_draft_payments(company, mode_of_payment)
+        payments = get_mpesa_draft_c2b_payments(company, mode_of_payment)
 
         self.assertEqual(len(payments), 1)
         self.assertEqual(payments[0]["name"], "MP001")
@@ -97,4 +95,3 @@ class TestMPesaAPI(FrappeTestCase):
         payment_entry = submit_mpesa_payment(mpesa_payment, customer)
 
         self.assertEqual(payment_entry, "PE001")
-
