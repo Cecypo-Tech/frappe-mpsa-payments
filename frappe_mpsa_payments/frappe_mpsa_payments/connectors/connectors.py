@@ -62,7 +62,7 @@ class ErrorObserver:
             frappe.throw(
                 _("A Fatal Error occurred. Check the Error Log."),
                 notifier.error,
-                title="Mpesa Fatal Error",
+                title=_("Mpesa Fatal Error"),
             )
 
 
