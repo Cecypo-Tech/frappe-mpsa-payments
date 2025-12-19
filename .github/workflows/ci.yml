@@ -5,10 +5,14 @@ on:
   push:
     branches:
       - develop
+      - 'version-*'
   pull_request:
+    branches:
+      - develop
+      - 'version-*'
 
 concurrency:
-  group: develop-frappe_mpsa_payments-${{ github.event.number }}
+  group: ${{ github.ref }} ${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
