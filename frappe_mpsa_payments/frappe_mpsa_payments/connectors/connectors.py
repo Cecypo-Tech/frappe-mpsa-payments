@@ -6,6 +6,7 @@ from typing import Callable, Literal, Optional, Union
 
 import frappe
 import requests
+from frappe import _
 from frappe.integrations.utils import create_request_log
 from frappe.model.document import Document
 from requests.auth import HTTPBasicAuth
@@ -59,7 +60,7 @@ class ErrorObserver:
                 reference_name=notifier.document_name,
             )
             frappe.throw(
-                "A Fatal Error occurred. Check the Error Log.",
+                _("A Fatal Error occurred. Check the Error Log."),
                 notifier.error,
                 title="Mpesa Fatal Error",
             )
@@ -199,7 +200,7 @@ class MpesaConnector(BaseMpesaConnector):
     ):
         if not all([self._endpoint, self._method, self._success_callback]):
             frappe.throw(
-                "Missing required parameters (endpoint, method, callbacks).",
+                _("Missing required parameters (endpoint, method, callbacks)."),
                 frappe.MandatoryError,
             )
 

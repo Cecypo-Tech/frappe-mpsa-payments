@@ -546,22 +546,19 @@ frappe.ui.form.on("B2C Payment Disbursement", {
 
 			if (from_value && !to_value) {
 				frappe.throw(
-					__(
-						`Please enter <b>${to_field.replace(
-							/_/g,
-							" "
-						)}</b> to complete the range for <b>${label}</b>`
+					__("Please enter <b>{0}</b> to complete the range for <b>{1}</b>").format(
+						to_field.replace(/_/g, " "),
+						label
 					)
 				);
 			}
 
 			if (from_value && to_value && from_value > to_value) {
 				frappe.throw(
-					__(
-						`For <b>${label}</b>, <b>${from_field.replace(
-							/_/g,
-							" "
-						)}</b> must be less than <b>${to_field.replace(/_/g, " ")}</b>.`
+					__("For <b>{0}</b>, <b>{1}</b> must be less than <b>{2}</b>").format(
+						label,
+						from_field.replace(/_/g, " "),
+						to_field.replace(/_/g, " ")
 					)
 				);
 			}

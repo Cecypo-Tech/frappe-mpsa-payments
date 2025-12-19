@@ -24,13 +24,13 @@ class MpesaPaymentReconciliation(Document):
         pass
 
     @staticmethod
-    def get_list(args):
+    def get_list(filters=None, **kwargs):
         pass
 
     @staticmethod
-    def get_count(args):
+    def get_count(filters=None, **kwargs):
         pass
 
     @staticmethod
-    def get_stats(args):
+    def get_stats(filters=None, **kwargs):
         pass
