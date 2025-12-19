@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 import frappe
 
-from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.test_mpesa_settings import (
+from ..mpesa_settings.test_mpesa_settings import (
     TestMpesaSettings,
 )
 

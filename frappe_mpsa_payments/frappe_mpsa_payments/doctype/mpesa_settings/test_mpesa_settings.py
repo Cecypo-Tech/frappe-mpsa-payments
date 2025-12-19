@@ -9,10 +9,11 @@ from erpnext.accounts.doctype.payment_entry.test_payment_entry import create_cus
 from erpnext.accounts.doctype.pos_invoice.test_pos_invoice import create_pos_invoice
 from erpnext.accounts.doctype.pos_profile.test_pos_profile import make_pos_profile
 from erpnext.stock.doctype.item.test_item import make_item
-from frappe_mpsa_payment.doctype.mpesa_settings.mpesa_settings import (
+
+from ...api.m_pesa_api import verify_transaction
+from .mpesa_settings import (
     create_mode_of_payment,
     process_balance_info,
-    verify_transaction,
 )
 
 

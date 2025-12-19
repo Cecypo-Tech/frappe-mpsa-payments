@@ -22,6 +22,7 @@ fixtures = [
     },
 ]
 
+before_tests = "frappe_mpsa_payments.setup.utils.before_tests"
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
