@@ -5,6 +5,7 @@ from __future__ import unicode_literals
 
 import frappe
 import requests
+from frappe import _
 from frappe.model.document import Document
 from frappe.utils import get_request_site_address
 
@@ -233,4 +234,6 @@ class MpesaC2BPaymentRegisterURL(Document):
         )
 
     def _show_final_error_message(self, last_error: Exception | None):
-        frappe.msgprint("M-Pesa C2B URL registration failed.", f"Error: {last_error}")
+        frappe.msgprint(
+            _("M-Pesa C2B URL registration failed."), _("Error: {0}").format(last_error)
+        )
