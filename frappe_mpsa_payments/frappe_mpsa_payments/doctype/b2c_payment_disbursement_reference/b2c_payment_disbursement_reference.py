@@ -60,24 +60,50 @@ class B2CPaymentDisbursementReference(Document):
 
 
 def sanitise_phone_number(phone_number: str) -> str:
-    """Sanitises a given phone_number string"""
-    phone_number = phone_number.replace("+", "").replace(" ", "")
+    """
+    Sanitises a given phone_number string to Kenyan international format (254XXXXXXXXX).
 
-    regex = re.compile(r"^0\d{9}$")
-    if not regex.match(phone_number):
+    Accepts:
+    - Local format: 0XXXXXXXXX (0 followed by 9 digits)
+    - International format: 254XXXXXXXXX (254 followed by 9 digits)
+    - International format with +: +254XXXXXXXXX
+
+    Returns the sanitised number in format 254XXXXXXXXX, or an original number if invalid.
+    """
+    original = phone_number
+
+    phone_number = (
+        phone_number.replace("+", "")
+        .replace(" ", "")
+        .replace("-", "")
+        .replace("(", "")
+        .replace(")", "")
+    )
+
+    local_regex = re.compile(r"^0\d{9}$")
+    if local_regex.match(phone_number):
+        return "254" + phone_number[1:]
+
+    international_regex = re.compile(r"^254\d{9}$")
+    if international_regex.match(phone_number):
         return phone_number
 
-    phone_number = "254" + phone_number[1:]
-    return phone_number
+    return original
 
 
 def is_valid_receiver_contact(receiver: str) -> bool:
     """Validates the Receiver's mobile number"""
-    receiver = receiver.replace("+", "").strip()
+    receiver = receiver.replace("+", "").replace(" ", "").strip()
+
+    if receiver.startswith("0") and len(receiver) == 10:
+        receiver = "254" + receiver[1:]
+
     pattern1 = re.compile(r"^2547\d{8}$")
     pattern2 = re.compile(r"(25410|25411)\d{7}$")
 
     if receiver.startswith("2547"):
         return bool(pattern1.match(receiver))
+    elif receiver.startswith("25410") or receiver.startswith("25411"):
+        return bool(pattern2.match(receiver))
 
-    return bool(pattern2.match(receiver))
+    return False
