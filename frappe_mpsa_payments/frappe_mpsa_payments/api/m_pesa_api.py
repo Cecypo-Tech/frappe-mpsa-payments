@@ -449,7 +449,6 @@ def stk_push_callback(**kwargs) -> None:
 
 
 def publish_stk_status(status: str, payment_request):
-
     expected_token = frappe.db.get_value(
         "Payment Request", payment_request, "payment_token"
     )
