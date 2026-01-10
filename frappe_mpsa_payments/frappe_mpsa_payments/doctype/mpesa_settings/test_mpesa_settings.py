@@ -83,7 +83,6 @@ class TestMpesaSettings(unittest.TestCase):
             frappe.db.set_value(
                 "Integration Request", ir_request.name, "name", conversation_id
             )
-        frappe.db.commit()
 
         mpesa_doc.get_account_balance_info()
 
