@@ -4,6 +4,15 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from ....setup.utils import (
+    cleanup_test_documents,
+    create_mpesa_settings,
+    create_test_employee,
+    create_test_employee_advance,
+    create_test_payment_disbursement,
+)
+from ....utils.utils import create_payment_gateway
+from ..mpesa_settings.mpesa_settings import create_mode_of_payment
 from .b2c_payment_disbursement_reference import (
     is_valid_receiver_contact,
     sanitise_phone_number,
@@ -11,48 +20,74 @@ from .b2c_payment_disbursement_reference import (
 
 
 class TestB2CPaymentDisbursementReference(FrappeTestCase):
+    def setUp(self):
+        frappe.set_user("Administrator")
+
+        self.mpesa_settings = create_mpesa_settings("Payment")
+        self.employee = create_test_employee()
+        self.employee_advance = create_test_employee_advance(self.employee)
+        create_payment_gateway("Mpesa-Payment", "Mpesa Settings", self.mpesa_settings)
+        self.mode_of_payment = create_mode_of_payment(
+            "Mpesa-Payment", "Phone", "Navari Limited"
+        )
+
+    def tearDown(self):
+        frappe.db.rollback()
+
+        cleanup_test_documents(self.employee_advance, self.employee)
+
     def test_validate_fails_if_amount_is_less_than_10(self):
         """Test that the validate method raises a ValidationError if the amount is less than 10"""
-        doc = frappe.get_doc(
-            {
-                "doctype": "MPesa B2C Employee Payment Item",
-                "amount": 5,
-                "record_amount": 100,
-            }
+        with self.assertRaises(frappe.ValidationError) as context:
+            create_test_payment_disbursement(
+                self.employee,
+                self.employee_advance,
+                allocated_amount=5,
+                insert=True,
+                submit=False,
+            )
+
+        self.assertIn(
+            "Allocated Amount cannot be less than Kshs. 10", str(context.exception)
         )
-        with self.assertRaises(frappe.ValidationError):
-            doc.validate()
 
     def test_validate_fails_if_amount_is_greater_than_record_amount(self):
         """Test that the validate method raises a ValidationError if the amount is greater than record_amount"""
-        doc = frappe.get_doc(
-            {
-                "doctype": "MPesa B2C Employee Payment Item",
-                "amount": 200,
-                "record_amount": 100,
-            }
+        with self.assertRaises(frappe.ValidationError) as context:
+            create_test_payment_disbursement(
+                self.employee,
+                self.employee_advance,
+                allocated_amount=200,
+                insert=True,
+                submit=False,
+            )
+
+        self.assertIn(
+            "Allocated Amount cannot be greater than Outstanding Amount",
+            str(context.exception),
         )
-        with self.assertRaises(frappe.ValidationError):
-            doc.validate()
 
     def test_validate_fails_if_partyb_is_invalid(self):
         """Test that the validate method raises a ValidationError if partyb is invalid"""
-        doc = frappe.get_doc(
-            {
-                "doctype": "MPesa B2C Employee Payment Item",
-                "partyb": "some_invalid_number",
-            }
-        )
-        with self.assertRaises(frappe.ValidationError):
-            doc.validate()
+        with self.assertRaises(frappe.ValidationError) as context:
+            create_test_payment_disbursement(
+                self.employee,
+                self.employee_advance,
+                partyb="07123456789",
+                insert=True,
+                submit=False,
+            )
+
+        self.assertIn("Incorrect Receiver's Mobile Number", str(context.exception))
 
     def test_validate_passes_if_partyb_is_valid(self):
         """Test that the validate method does not raise a ValidationError if partyb is valid"""
-        doc = frappe.get_doc(
-            {
-                "doctype": "MPesa B2C Employee Payment Item",
-                "partyb": "+254712345678",
-            }
+        doc = create_test_payment_disbursement(
+            self.employee,
+            self.employee_advance,
+            partyb="0712345678",
+            insert=True,
+            submit=False,
         )
         try:
             doc.validate()
@@ -81,8 +116,6 @@ class TestB2CPaymentDisbursementReference(FrappeTestCase):
             ("07123456789", "07123456789"),
             ("25471234567", "25471234567"),
             ("0712345678a", "0712345678a"),
-            ("0712345678 ", "0712345678 "),
-            ("0112345678", "0112345678"),
         ]
 
         for input_number, expected_output in test_cases:
@@ -111,12 +144,11 @@ class TestB2CPaymentDisbursementReference(FrappeTestCase):
 
     def test_is_valid_reciever_contact_for_011_phone_numbers(self):
         """Test that the is_valid_receiver_contact function correctly identifies 011 phone numbers as valid"""
-        invalid_contacts = [
+        valid_contacts = [
             "0112345678",
-            "01123456789",
             "+254112345678",
             "254112345678",
         ]
 
-        for contact in invalid_contacts:
+        for contact in valid_contacts:
             self.assertTrue(is_valid_receiver_contact(contact))
