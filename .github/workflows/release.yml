@@ -21,7 +21,7 @@ jobs:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: navariltd
-          repositories: navari_csf_ke
+          repositories: frappe-mpsa-payments
 
       - name: Checkout repository
         uses: actions/checkout@v4
