@@ -7,7 +7,7 @@ import frappe
 import requests
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import get_request_site_address
+from frappe.utils import get_request_site_address, get_url
 
 from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import get_token
 
@@ -53,7 +53,11 @@ class MpesaC2BPaymentRegisterURL(Document):
         )
 
     def _build_callback_urls(self) -> tuple[str, str]:
-        site_url = get_request_site_address(True)
+        try:
+            site_url = get_request_site_address(True)
+        except RuntimeError:
+            site_url = get_url()
+
         base_path = (
             "/api/method/frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api"
         )
