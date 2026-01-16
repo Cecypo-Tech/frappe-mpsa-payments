@@ -39,8 +39,31 @@ frappe.ui.form.on("Mpesa Settings", {
 	check_transaction_status: function (frm) {
 		if (!frm.doc.initiator_name && !frm.doc.security_credential) {
 			frappe.throw(__("Please set the initiator name and the security credential"));
+			return;
 		}
-		frappe.clear_cache;
+
+		frappe.realtime.on("mpesa_transaction_status_update", (data) => {
+			frappe.hide_progress();
+
+			frappe.msgprint({
+				message: __(data.message),
+				title: __(data.title),
+				indicator:
+					data.status === "error"
+						? "red"
+						: data.status === "warning"
+						? "orange"
+						: "green",
+			});
+
+			if (data.document_name) {
+				frappe.show_alert({
+					message: __("View transaction: {0}", [data.document_name]),
+					indicator: "green",
+				});
+			}
+		});
+
 		frappe.prompt(
 			[
 				{
@@ -53,6 +76,8 @@ frappe.ui.form.on("Mpesa Settings", {
 					label: "Remarks",
 					fieldname: "remarks",
 					fieldtype: "Small Text",
+					default: "OK",
+					hidden: 1,
 				},
 			],
 			(values) => {
@@ -61,25 +86,35 @@ frappe.ui.form.on("Mpesa Settings", {
 					args: {
 						mpesa_settings: frm.doc.name,
 						transaction_id: values.transaction_id,
-						remarks: values.remarks,
+						remarks: values.remarks || "OK",
 					},
+					freeze: true,
+					freeze_message: __("Checking transaction status..."),
 					callback: (r) => {
-						if (r.message && r.message.status === "queued") {
-							frappe.show_alert({
-								message: __("Request queued and will be processed shortly"),
-								indicator: "orange",
-							});
-						} else {
-							frappe.msgprint({
-								message: __(r.message.message),
-								title: r.message.status === "error" ? "Error" : "Success",
-								indicator: r.message.status === "error" ? "red" : "green",
-							});
+						if (r.message) {
+							if (r.message.status === "error") {
+								frappe.hide_progress();
+								frappe.msgprint({
+									message: __(r.message.message),
+									title: __("Error"),
+									indicator: "red",
+								});
+							} else {
+								frappe.show_progress(
+									__("Processing"),
+									50,
+									100,
+									__("Waiting for M-Pesa callback...")
+								);
+							}
 						}
 					},
 					error: (err) => {
+						frappe.hide_progress();
 						frappe.msgprint({
-							message: __("An error occurred: {0}", [err.message]),
+							message: __("An error occurred: {0}", [
+								err.message || "Unknown error",
+							]),
 							title: "Error",
 							indicator: "red",
 						});
