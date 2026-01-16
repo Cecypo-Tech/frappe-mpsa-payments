@@ -1,5 +1,33 @@
 frappe.listview_settings["Mpesa C2B Payment Register"] = {
 	onload: function (listview) {
+		// Register realtime listener
+		if (!listview._mpesa_realtime_registered) {
+			listview._mpesa_realtime_registered = true;
+
+			frappe.realtime.on("mpesa_transaction_status_update", (data) => {
+				frappe.hide_progress();
+
+				frappe.msgprint({
+					message: __(data.message),
+					title: __(data.title),
+					indicator:
+						data.status === "error"
+							? "red"
+							: data.status === "warning"
+							? "orange"
+							: "green",
+				});
+
+				if (data.document_name) {
+					frappe.show_alert({
+						message: __("View transaction: {0}", [data.document_name]),
+						indicator: "green",
+					});
+				}
+
+				listview.refresh();
+			});
+		}
 		// Add a custom button to the page actions (top bar)
 		listview.page.add_inner_button(__("Check Transaction Status"), function () {
 			frappe.prompt(
@@ -54,20 +82,25 @@ frappe.listview_settings["Mpesa C2B Payment Register"] = {
 								freeze_message: __("Checking transaction status..."),
 								callback: (r) => {
 									if (r.message) {
-										frappe.msgprint({
-											message: __(r.message.message),
-											title:
-												r.message.status === "error" ? "Error" : "Success",
-											indicator:
-												r.message.status === "error" ? "red" : "green",
-										});
-
-										if (r.message.status === "success") {
-											listview.refresh();
+										if (r.message.status === "error") {
+											frappe.hide_progress();
+											frappe.msgprint({
+												message: __(r.message.message),
+												title: __("Error"),
+												indicator: "red",
+											});
+										} else {
+											frappe.show_progress(
+												__("Processing"),
+												50,
+												100,
+												__("Waiting for M-Pesa callback...")
+											);
 										}
 									}
 								},
 								error: (err) => {
+									frappe.hide_progress();
 									frappe.msgprint({
 										message: __("An error occurred: {0}", [
 											err.message || "Unknown error",
