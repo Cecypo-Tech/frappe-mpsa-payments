@@ -493,6 +493,7 @@ def trigger_transaction_status(mpesa_settings, transaction_id, remarks="OK"):
         if response.get("ResponseCode") == "0":
             integration_request.status = "Completed"
             integration_request.output = dumps(response)
+            integration_request.reference_docname = response["OriginatorConversationID"]
             integration_request.save(ignore_permissions=True)
             frappe.db.commit()  # nosegrep
 

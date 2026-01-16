@@ -728,17 +728,12 @@ def handle_transaction_status_result():
             return {"ResultCode": 1, "ResultDesc": "Empty response data"}
 
         integration_request = frappe.get_doc(
+            "Integration Request",
             {
-                "doctype": "Integration Request",
-                "is_remote_request": 1,
-                "integration_request_service": "Mpesa Transaction Status Result Callback",
-                "reference_doctype": "Mpesa C2B Payment Register",
-                "status": "Queued",
-                "data": json.dumps(response_data),
-                "url": frappe.request.url,
-                "method": "POST",
-            }
-        ).insert(ignore_permissions=True)
+                "integration_request_service": "Mpesa Transaction Status",
+                "reference_docname": response["OriginatorConversationID"],
+            },
+        )
         frappe.db.commit()
 
         result = process_mpesa_integration_request(integration_request, response_data)
@@ -790,6 +785,7 @@ def process_mpesa_integration_request(integration_request, response_data):
                     "result_desc": result_desc,
                     "receipt_no": receipt_no,
                 },
+                user=integration_request.owner,
             )
 
             return {"ResultCode": 0, "ResultDesc": "Accepted (failed transaction)"}
@@ -814,6 +810,7 @@ def process_mpesa_integration_request(integration_request, response_data):
                     "message": error_msg,
                     "receipt_no": receipt_no,
                 },
+                user=integration_request.owner,
             )
 
             return {"ResultCode": 0, "ResultDesc": "Duplicate transaction rejected"}
@@ -861,6 +858,7 @@ def process_mpesa_integration_request(integration_request, response_data):
                 "receipt_no": receipt_no,
                 "document_name": mpesa_doc.name,
             },
+            user=integration_request.owner,
         )
 
         return {"ResultCode": 0, "ResultDesc": success_msg}
@@ -884,6 +882,7 @@ def process_mpesa_integration_request(integration_request, response_data):
                 "title": "Processing Error",
                 "message": error_message,
             },
+            user=integration_request.owner,
         )
 
         return {"ResutlCode": 1, "ResultDesc": "Processing failed"}
