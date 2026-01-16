@@ -727,14 +727,23 @@ def handle_transaction_status_result():
             frappe.log_error("Empty response from Mpesa", "Mpesa Webhook Error")
             return {"ResultCode": 1, "ResultDesc": "Empty response data"}
 
-        integration_request = frappe.get_doc(
+        correlation_id = response_data.get("Result", {}).get("OriginatorConversationID")
+        integration_request = frappe.db.get_value(
             "Integration Request",
             {
                 "integration_request_service": "Mpesa Transaction Status",
-                "reference_docname": response["OriginatorConversationID"],
+                "request_id": correlation_id,
             },
+            "name",
         )
         frappe.db.commit()
+
+        if not integration_request:
+            frappe.log_error(
+                f"Could not find Integration Request for OriginatorConversationID {correlation_id}",
+                "Mpesa Webhook Error",
+            )
+            return {"ResultCode": 1, "ResultDesc": "Integration Request not found"}
 
         result = process_mpesa_integration_request(integration_request, response_data)
 
@@ -754,6 +763,9 @@ def handle_transaction_status_result():
 def process_mpesa_integration_request(integration_request, response_data):
     """Process the Mpesa Integration Request and publish updates in real-time"""
     try:
+        ir_owner = frappe.db.get_value(
+            "Integration Request", integration_request, "owner"
+        )
         result_data = response_data.get("Result", {})
         result_parameters = result_data.get("ResultParameters", {}).get(
             "ResultParameter", []
@@ -770,9 +782,12 @@ def process_mpesa_integration_request(integration_request, response_data):
 
         if result_code != 0:
             error_msg = f"Result Code {result_code}: {result_desc}"
-            integration_request.status = "Failed"
-            integration_request.output = error_msg
-            integration_request.save(ignore_permissions=True)
+            frappe.db.set_value(
+                "Integration Request",
+                integration_request,
+                {"status": "Failed", "output": error_msg},
+                update_modified=True,
+            )
             frappe.db.commit()
 
             frappe.publish_realtime(
@@ -785,16 +800,19 @@ def process_mpesa_integration_request(integration_request, response_data):
                     "result_desc": result_desc,
                     "receipt_no": receipt_no,
                 },
-                user=integration_request.owner,
+                user=ir_owner,
             )
 
             return {"ResultCode": 0, "ResultDesc": "Accepted (failed transaction)"}
 
         if frappe.db.exists("Mpesa C2B Payment Register", {"transid": receipt_no}):
             error_msg = f"Duplicate transaction: Receipt No {receipt_no} already exists"
-            integration_request.status = "Failed"
-            integration_request.output = error_msg
-            integration_request.save(ignore_permissions=True)
+            frappe.db.set_value(
+                "Integration Request",
+                integration_request,
+                {"status": "Failed", "error": error_msg},
+                update_modified=True,
+            )
             frappe.db.commit()
 
             frappe.log_error(
@@ -810,7 +828,7 @@ def process_mpesa_integration_request(integration_request, response_data):
                     "message": error_msg,
                     "receipt_no": receipt_no,
                 },
-                user=integration_request.owner,
+                user=ir_owner,
             )
 
             return {"ResultCode": 0, "ResultDesc": "Duplicate transaction rejected"}
@@ -843,10 +861,16 @@ def process_mpesa_integration_request(integration_request, response_data):
         frappe.db.commit()
 
         success_msg = "Transaction processed successfully"
-        integration_request.status = "Completed"
-        integration_request.output = success_msg
-        integration_request.reference_document = mpesa_doc.name
-        integration_request.save(ignore_permissions=True)
+        frappe.db.set_value(
+            "Integration Request",
+            integration_request,
+            {
+                "status": "Completed",
+                "output": success_msg,
+                "reference_document": mpesa_doc.name,
+            },
+            update_modified=True,
+        )
         frappe.db.commit()
 
         frappe.publish_realtime(
@@ -858,16 +882,19 @@ def process_mpesa_integration_request(integration_request, response_data):
                 "receipt_no": receipt_no,
                 "document_name": mpesa_doc.name,
             },
-            user=integration_request.owner,
+            user=ir_owner,
         )
 
         return {"ResultCode": 0, "ResultDesc": success_msg}
 
     except Exception as e:
         error_message = f"Mpesa Processing Error: {str(e)}"
-        integration_request.status = "Failed"
-        integration_request.output = error_message
-        integration_request.save(ignore_permissions=True)
+        frappe.db.set_value(
+            "Integration Request",
+            integration_request,
+            {"status": "Failed", "error": error_message},
+            update_modified=True,
+        )
         frappe.db.commit()
 
         frappe.log_error(
@@ -882,7 +909,7 @@ def process_mpesa_integration_request(integration_request, response_data):
                 "title": "Processing Error",
                 "message": error_message,
             },
-            user=integration_request.owner,
+            user=ir_owner,
         )
 
         return {"ResutlCode": 1, "ResultDesc": "Processing failed"}

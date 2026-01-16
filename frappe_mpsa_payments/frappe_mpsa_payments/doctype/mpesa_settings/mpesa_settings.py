@@ -490,13 +490,27 @@ def trigger_transaction_status(mpesa_settings, transaction_id, remarks="OK"):
             result_url=result_url,
         )
 
-        if response.get("ResponseCode") == "0":
-            integration_request.status = "Completed"
-            integration_request.output = dumps(response)
-            integration_request.reference_docname = response["OriginatorConversationID"]
-            integration_request.save(ignore_permissions=True)
-            frappe.db.commit()  # nosegrep
+        status = "Completed" if response.get("ResponseCode") == "0" else "Failed"
+        output = (
+            frappe.as_json(response)
+            if status == "Completed"
+            else f"{response.get('errorCode', 'Unknown')}: {response.get('errorMessage', 'Unknown error')}"
+        )
 
+        frappe.db.set_value(
+            "Integration Request",
+            integration_request.name,
+            {
+                "status": status,
+                "output": output,
+                "request_id": response.get("OriginatorConversationID"),
+            },
+            update_modified=True,
+        )
+
+        frappe.db.commit()  # nosegrep
+
+        if status == "Completed":
             return {
                 "status": "success",
                 "message": response.get(
@@ -506,19 +520,16 @@ def trigger_transaction_status(mpesa_settings, transaction_id, remarks="OK"):
             }
 
         else:
-            error_msg = f"{response.get('errorCode', 'Unknown')}: {response.get('errorMessage', 'Unknown error')}"
-            integration_request.status = "Failed"
-            integration_request.output = error_msg
-            integration_request.save(ignore_permissions=True)
-            frappe.db.commit()
-
-            return {"status": "error", "message": error_msg}
+            return {"status": "error", "message": output}
 
     except Exception as e:
         if "integration_request" in locals():
-            integration_request.status = "Failed"
-            integration_request.output = str(e)
-            integration_request.save(ignore_permissions=True)
+            frappe.db.set_value(
+                "Integration Request",
+                integration_request.name,
+                {"status": "Failed", "output": str(e)},
+                update_modified=True,
+            )
             frappe.db.commit()  # nosegrep
 
         frappe.log_error(title="Mpesa Transaction Status Error", message=str(e))
