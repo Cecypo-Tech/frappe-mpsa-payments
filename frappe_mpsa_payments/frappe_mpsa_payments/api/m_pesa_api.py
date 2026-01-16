@@ -770,10 +770,11 @@ def process_mpesa_integration_request(integration_request, response_data):
         }
 
         result_code = result_data.get("ResultCode", None)
+        result_desc = result_data.get("ResultDesc", "Unknown Error")
         receipt_no = result_params.get("ReceiptNo", "")
 
         if result_code != 0:
-            error_msg = f"Transaction failed with result code: {result_code}"
+            error_msg = f"Result Code {result_code}: {result_desc}"
             integration_request.status = "Failed"
             integration_request.output = error_msg
             integration_request.save(ignore_permissions=True)
@@ -785,6 +786,8 @@ def process_mpesa_integration_request(integration_request, response_data):
                     "status": "error",
                     "title": "Transaction Failed",
                     "message": error_msg,
+                    "result_code": result_code,
+                    "result_desc": result_desc,
                     "receipt_no": receipt_no,
                 },
             )
@@ -807,7 +810,7 @@ def process_mpesa_integration_request(integration_request, response_data):
                 event="mpesa_transaction_status_update",
                 message={
                     "status": "warning",
-                    "title": "Duplicate Transaction",
+                    "title": "Duplicate M-Pesa Transaction",
                     "message": error_msg,
                     "receipt_no": receipt_no,
                 },
