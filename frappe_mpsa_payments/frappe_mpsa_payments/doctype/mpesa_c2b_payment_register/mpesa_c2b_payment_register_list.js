@@ -21,6 +21,8 @@ frappe.listview_settings["Mpesa C2B Payment Register"] = {
 						label: "Remarks",
 						fieldname: "remarks",
 						fieldtype: "Small Text",
+						default: "OK",
+						hidden: 1,
 					},
 				],
 				(values) => {
@@ -38,6 +40,7 @@ frappe.listview_settings["Mpesa C2B Payment Register"] = {
 										"Please set the initiator name and security credential in the selected Mpesa Settings"
 									)
 								);
+								return;
 							}
 
 							frappe.call({
@@ -45,12 +48,12 @@ frappe.listview_settings["Mpesa C2B Payment Register"] = {
 								args: {
 									mpesa_settings: values.mpesa_settings,
 									transaction_id: values.transaction_id,
-									remarks: values.remarks,
+									remarks: values.remarks || "OK",
 								},
+								freeze: true,
+								freeze_message: __("Checking transaction status..."),
 								callback: (r) => {
-									if (r.message && r.message.status === "queued") {
-										// Wait for the transaction status to be processed
-									} else {
+									if (r.message) {
 										frappe.msgprint({
 											message: __(r.message.message),
 											title:
@@ -58,11 +61,17 @@ frappe.listview_settings["Mpesa C2B Payment Register"] = {
 											indicator:
 												r.message.status === "error" ? "red" : "green",
 										});
+
+										if (r.message.status === "success") {
+											listview.refresh();
+										}
 									}
 								},
 								error: (err) => {
 									frappe.msgprint({
-										message: __("An error occurred: {0}", [err.message]),
+										message: __("An error occurred: {0}", [
+											err.message || "Unknown error",
+										]),
 										title: "Error",
 										indicator: "red",
 									});
@@ -74,19 +83,6 @@ frappe.listview_settings["Mpesa C2B Payment Register"] = {
 				__("Transaction Status Query"),
 				__("Submit")
 			);
-		});
-	},
-
-	refresh: function (listview) {
-		frappe.realtime.on("mpesa_transaction_status", function (data) {
-			frappe.msgprint({
-				message: __(data.message),
-				title: data.status === "success" ? "Success" : "Error",
-				indicator: data.status === "success" ? "green" : "red",
-			});
-			if (data.status === "success" && data.doc_name) {
-				listview.refresh();
-			}
 		});
 	},
 };

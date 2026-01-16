@@ -39,8 +39,8 @@ frappe.ui.form.on("Mpesa Settings", {
 	check_transaction_status: function (frm) {
 		if (!frm.doc.initiator_name && !frm.doc.security_credential) {
 			frappe.throw(__("Please set the initiator name and the security credential"));
+			return;
 		}
-		frappe.clear_cache;
 		frappe.prompt(
 			[
 				{
@@ -53,6 +53,8 @@ frappe.ui.form.on("Mpesa Settings", {
 					label: "Remarks",
 					fieldname: "remarks",
 					fieldtype: "Small Text",
+					default: "OK",
+					hidden: 1,
 				},
 			],
 			(values) => {
@@ -61,25 +63,24 @@ frappe.ui.form.on("Mpesa Settings", {
 					args: {
 						mpesa_settings: frm.doc.name,
 						transaction_id: values.transaction_id,
-						remarks: values.remarks,
+						remarks: values.remarks || "OK",
 					},
+					freeze: true,
+					freeze_message: __("Checking transaction status..."),
 					callback: (r) => {
-						if (r.message && r.message.status === "queued") {
-							frappe.show_alert({
-								message: __("Request queued and will be processed shortly"),
-								indicator: "orange",
-							});
-						} else {
+						if (r.message) {
 							frappe.msgprint({
 								message: __(r.message.message),
-								title: r.message.status === "error" ? "Error" : "Success",
+								title: r.message.status === "error" ? __("Error") : __("Success"),
 								indicator: r.message.status === "error" ? "red" : "green",
 							});
 						}
 					},
 					error: (err) => {
 						frappe.msgprint({
-							message: __("An error occurred: {0}", [err.message]),
+							message: __("An error occurred: {0}", [
+								err.message || "Unknown error",
+							]),
 							title: "Error",
 							indicator: "red",
 						});

@@ -723,6 +723,10 @@ def handle_transaction_status_result():
         response = frappe.request.data
         response_data = json.loads(response)
 
+        if not response_data:
+            frappe.log_error("Empty response from Mpesa", "Mpesa Webhook Error")
+            return {"ResultCode": 1, "ResultDesc": "Empty response data"}
+
         integration_request = frappe.get_doc(
             {
                 "doctype": "Integration Request",
@@ -737,37 +741,24 @@ def handle_transaction_status_result():
         ).insert(ignore_permissions=True)
         frappe.db.commit()
 
-        frappe.enqueue(
-            "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.process_mpesa_integration_request",
-            queue="short",
-            timeout=300,
-            job_id=f"mpesa_process_{integration_request.name}",
-            integration_request_name=integration_request.name,
-            deduplicate=True,
-        )
+        result = process_mpesa_integration_request(integration_request, response_data)
 
-        return {"status": "queued", "message": "Transaction queued for processing"}
+        return result
 
     except json.JSONDecodeError as e:
         frappe.log_error(
-            f"Failed to decode JSON from Mpesa response: {str(e)}", "Mpesa API Error"
+            f"Failed to decode JSON from Mpesa response: {str(e)}",
+            "Mpesa Webhook Error",
         )
-        return {"status": "error", "message": "Invalid JSON data"}
+        return {"ResultCode": 1, "ResultDesc": "Invalid JSON data"}
     except Exception as e:
-        frappe.log_error(f"Error in Mpesa webhook: {str(e)}", "Mpesa API Error")
-        return {"status": "error", "message": f"Webhook error: {str(e)}"}
+        frappe.log_error(f"Error in Mpesa webhook: {str(e)}", "Mpesa Webhook Error")
+        return {"ResultCode": 1, "ResultDesc": "Processing error"}
 
 
-def process_mpesa_integration_request(integration_request_name):
+def process_mpesa_integration_request(integration_request, response_data):
     """Process the Mpesa Integration Request and publish updates in real-time"""
     try:
-        # Fetch the Integration Request
-        integration_request = frappe.get_doc(
-            "Integration Request", integration_request_name
-        )
-
-        # Parse the stored data
-        response_data = json.loads(integration_request.data)
         result_data = response_data.get("Result", {})
         result_parameters = result_data.get("ResultParameters", {}).get(
             "ResultParameter", []
@@ -780,81 +771,63 @@ def process_mpesa_integration_request(integration_request_name):
 
         result_code = result_data.get("ResultCode", None)
         receipt_no = result_params.get("ReceiptNo", "")
-        business_shortcode = result_params.get("CreditPartyName", "").split("-")
 
-        if result_code == 0:
-            if frappe.db.exists("Mpesa C2B Payment Register", {"transid": receipt_no}):
-                error_msg = (
-                    f"Duplicate transaction: Receipt No {receipt_no} already exists"
-                )
-                integration_request.status = "Failed"
-                integration_request.output = error_msg
-                integration_request.save(ignore_permissions=True)
-                frappe.db.commit()
-
-                frappe.publish_realtime(
-                    event="mpesa_transaction_status",
-                    message={"status": "error", "message": error_msg},
-                    user=frappe.session.user,
-                )
-                return
-
-            # Create the Mpesa document
-            mpesa_doc = frappe.new_doc("Mpesa C2B Payment Register")
-            mpesa_doc.full_name = result_params.get("DebitPartyName", "")
-            mpesa_doc.transactiontype = result_params.get("ReasonType", "")
-            mpesa_doc.transid = result_params.get("ReceiptNo", "")
-            mpesa_doc.transtime = result_params.get("InitiatedTime", "")
-            mpesa_doc.transamount = float(result_params.get("Amount", 0.0))
-            mpesa_doc.businessshortcode = business_shortcode[0]
-            mpesa_doc.billrefnumber = result_params.get("ReceiptNo", "")
-            mpesa_doc.invoicenumber = result_params.get("TransactionID", "")
-            mpesa_doc.orgaccountbalance = result_params.get("DebitAccountType", "")
-            mpesa_doc.thirdpartytransid = result_params.get(
-                "OriginatorConversationID", ""
-            )
-
-            debit_party = result_params.get("DebitPartyName", "").split(" - ")
-            mpesa_doc.msisdn = debit_party[0] if len(debit_party) > 0 else ""
-            name_parts = (
-                debit_party[1].split(" ") if len(debit_party) > 1 else ["", "", ""]
-            )
-            mpesa_doc.firstname = name_parts[0]
-            mpesa_doc.middlename = name_parts[1] if len(name_parts) > 1 else ""
-            mpesa_doc.lastname = name_parts[-1] if len(name_parts) > 2 else ""
-
-            mpesa_doc.insert(ignore_permissions=True)
-            frappe.db.commit()
-
-            success_msg = "Transaction processed successfully"
-            integration_request.status = "Completed"
-            integration_request.output = success_msg
-            integration_request.reference_document = mpesa_doc.name
+        if result_code != 0:
+            error_msg = f"Transaction failed with result code: {result_code}"
+            integration_request.status = "Failed"
+            integration_request.output = error_msg
             integration_request.save(ignore_permissions=True)
             frappe.db.commit()
+            return {"ResultCode": 0, "ResultDesc": "Accepted (failed transaction)"}
 
-            frappe.publish_realtime(
-                event="mpesa_transaction_status",
-                message={
-                    "status": "success",
-                    "message": success_msg,
-                    "doc_name": mpesa_doc.name,
-                },
-                user=frappe.session.user,
-            )
-
-        else:
-            error_msg = "Transaction failed with non-zero result code"
+        if frappe.db.exists("Mpesa C2B Payment Register", {"transid": receipt_no}):
+            error_msg = f"Duplicate transaction: Receipt No {receipt_no} already exists"
             integration_request.status = "Failed"
             integration_request.output = error_msg
             integration_request.save(ignore_permissions=True)
             frappe.db.commit()
 
-            frappe.publish_realtime(
-                event="mpesa_transaction_status",
-                message={"status": "error", "message": error_msg},
-                user=frappe.session.user,
+            frappe.log_error(
+                title=f"Duplicate M-Pesa Transaction: {receipt_no}",
+                message=f"Transaction ID: {receipt_no}\nFull Data: {json.dumps(response_data, indent=2)}",
             )
+            return {"ResultCode": 0, "ResultDesc": "Duplicate transaction rejected"}
+
+        business_shortcode = result_params.get("CreditPartyName", "").split("-")
+        debit_party = result_params.get("DebitPartyName", "").split(" - ")
+        name_parts = debit_party[1].split(" ") if len(debit_party) > 1 else ["", "", ""]
+
+        # Create the Mpesa document
+        mpesa_doc = frappe.new_doc("Mpesa C2B Payment Register")
+        mpesa_doc.full_name = result_params.get("DebitPartyName", "")
+        mpesa_doc.transactiontype = result_params.get("ReasonType", "")
+        mpesa_doc.transid = receipt_no
+        mpesa_doc.transtime = result_params.get("InitiatedTime", "")
+        mpesa_doc.transamount = float(result_params.get("Amount", 0.0))
+        mpesa_doc.businessshortcode = (
+            business_shortcode[0] if business_shortcode else ""
+        )
+        mpesa_doc.billrefnumber = receipt_no
+        mpesa_doc.invoicenumber = result_params.get("TransactionID", "")
+        mpesa_doc.orgaccountbalance = result_params.get("DebitAccountType", "")
+        mpesa_doc.thirdpartytransid = result_params.get("OriginatorConversationID", "")
+
+        mpesa_doc.msisdn = debit_party[0] if len(debit_party) > 0 else ""
+        mpesa_doc.firstname = name_parts[0]
+        mpesa_doc.middlename = name_parts[1] if len(name_parts) > 1 else ""
+        mpesa_doc.lastname = name_parts[-1] if len(name_parts) > 2 else ""
+
+        mpesa_doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        success_msg = "Transaction processed successfully"
+        integration_request.status = "Completed"
+        integration_request.output = success_msg
+        integration_request.reference_document = mpesa_doc.name
+        integration_request.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        return {"ResultCode": 0, "ResultDesc": success_msg}
 
     except Exception as e:
         error_message = f"Mpesa Processing Error: {str(e)}"
@@ -864,14 +837,11 @@ def process_mpesa_integration_request(integration_request_name):
         frappe.db.commit()
 
         frappe.log_error(
+            "Mpesa Transaction Processing Error",
             f"{error_message}\nData: {integration_request.data}",
-            "Mpesa Integration Error",
         )
-        frappe.publish_realtime(
-            event="mpesa_transaction_status",
-            message={"status": "error", "message": error_message},
-            user=frappe.session.user,
-        )
+
+        return {"ResutlCode": 1, "ResultDesc": "Processing failed"}
 
 
 @frappe.whitelist(allow_guest=True)
