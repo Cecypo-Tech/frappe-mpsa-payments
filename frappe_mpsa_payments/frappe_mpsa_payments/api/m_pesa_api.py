@@ -785,7 +785,7 @@ def process_mpesa_integration_request(integration_request, response_data):
             frappe.db.set_value(
                 "Integration Request",
                 integration_request,
-                {"status": "Failed", "output": error_msg},
+                {"status": "Failed", "error": error_msg},
                 update_modified=True,
             )
             frappe.db.commit()
