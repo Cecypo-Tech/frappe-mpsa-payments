@@ -778,6 +778,17 @@ def process_mpesa_integration_request(integration_request, response_data):
             integration_request.output = error_msg
             integration_request.save(ignore_permissions=True)
             frappe.db.commit()
+
+            frappe.publish_realtime(
+                event="mpesa_transaction_status_update",
+                message={
+                    "status": "error",
+                    "title": "Transaction Failed",
+                    "message": error_msg,
+                    "receipt_no": receipt_no,
+                },
+            )
+
             return {"ResultCode": 0, "ResultDesc": "Accepted (failed transaction)"}
 
         if frappe.db.exists("Mpesa C2B Payment Register", {"transid": receipt_no}):
@@ -791,6 +802,17 @@ def process_mpesa_integration_request(integration_request, response_data):
                 title=f"Duplicate M-Pesa Transaction: {receipt_no}",
                 message=f"Transaction ID: {receipt_no}\nFull Data: {json.dumps(response_data, indent=2)}",
             )
+
+            frappe.publish_realtime(
+                event="mpesa_transaction_status_update",
+                message={
+                    "status": "warning",
+                    "title": "Duplicate Transaction",
+                    "message": error_msg,
+                    "receipt_no": receipt_no,
+                },
+            )
+
             return {"ResultCode": 0, "ResultDesc": "Duplicate transaction rejected"}
 
         business_shortcode = result_params.get("CreditPartyName", "").split("-")
@@ -827,6 +849,17 @@ def process_mpesa_integration_request(integration_request, response_data):
         integration_request.save(ignore_permissions=True)
         frappe.db.commit()
 
+        frappe.publish_realtime(
+            event="mpesa_transaction_status_update",
+            message={
+                "status": "success",
+                "title": "Transaction Successful",
+                "message": success_msg,
+                "receipt_no": receipt_no,
+                "document_name": mpesa_doc.name,
+            },
+        )
+
         return {"ResultCode": 0, "ResultDesc": success_msg}
 
     except Exception as e:
@@ -839,6 +872,15 @@ def process_mpesa_integration_request(integration_request, response_data):
         frappe.log_error(
             "Mpesa Transaction Processing Error",
             f"{error_message}\nData: {integration_request.data}",
+        )
+
+        frappe.publish_realtime(
+            event="mpesa_transaction_status_update",
+            message={
+                "status": "error",
+                "title": "Processing Error",
+                "message": error_message,
+            },
         )
 
         return {"ResutlCode": 1, "ResultDesc": "Processing failed"}

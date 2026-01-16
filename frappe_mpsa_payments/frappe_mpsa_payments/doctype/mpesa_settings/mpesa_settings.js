@@ -41,6 +41,29 @@ frappe.ui.form.on("Mpesa Settings", {
 			frappe.throw(__("Please set the initiator name and the security credential"));
 			return;
 		}
+
+		frappe.realtime.on("mpesa_transaction_status_update", (data) => {
+			frappe.hide_progress();
+
+			frappe.msgprint({
+				message: __(data.message),
+				title: __(data.title),
+				indicator:
+					data.status === "error"
+						? "red"
+						: data.status === "warning"
+						? "orange"
+						: "green",
+			});
+
+			if (data.document_name) {
+				frappe.show_alert({
+					message: __("View transaction: {0}", [data.document_name]),
+					indicator: "green",
+				});
+			}
+		});
+
 		frappe.prompt(
 			[
 				{
@@ -69,14 +92,25 @@ frappe.ui.form.on("Mpesa Settings", {
 					freeze_message: __("Checking transaction status..."),
 					callback: (r) => {
 						if (r.message) {
-							frappe.msgprint({
-								message: __(r.message.message),
-								title: r.message.status === "error" ? __("Error") : __("Success"),
-								indicator: r.message.status === "error" ? "red" : "green",
-							});
+							if (r.message.status === "error") {
+								frappe.hide_progress();
+								frappe.msgprint({
+									message: __(r.message.message),
+									title: __("Error"),
+									indicator: "red",
+								});
+							} else {
+								frappe.show_progress(
+									__("Processing"),
+									50,
+									100,
+									__("Waiting for M-Pesa callback...")
+								);
+							}
 						}
 					},
 					error: (err) => {
+						frappe.hide_progress();
 						frappe.msgprint({
 							message: __("An error occurred: {0}", [
 								err.message || "Unknown error",
