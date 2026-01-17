@@ -740,8 +740,8 @@ def handle_transaction_status_result():
 
         if not integration_request:
             frappe.log_error(
-                f"Could not find Integration Request for OriginatorConversationID {correlation_id}",
                 "Mpesa Webhook Error",
+                f"Could not find Integration Request for OriginatorConversationID {correlation_id}",
             )
             return {"ResultCode": 1, "ResultDesc": "Integration Request not found"}
 
@@ -751,12 +751,12 @@ def handle_transaction_status_result():
 
     except json.JSONDecodeError as e:
         frappe.log_error(
-            f"Failed to decode JSON from Mpesa response: {str(e)}",
             "Mpesa Webhook Error",
+            f"Failed to decode JSON from Mpesa response: {e}",
         )
         return {"ResultCode": 1, "ResultDesc": "Invalid JSON data"}
     except Exception as e:
-        frappe.log_error(f"Error in Mpesa webhook: {str(e)}", "Mpesa Webhook Error")
+        frappe.log_error("Mpesa Webhook Error", f"Error in Mpesa webhook: {e}")
         return {"ResultCode": 1, "ResultDesc": "Processing error"}
 
 
@@ -867,7 +867,7 @@ def process_mpesa_integration_request(integration_request, response_data):
             {
                 "status": "Completed",
                 "output": success_msg,
-                "reference_document": mpesa_doc.name,
+                "reference_docname": mpesa_doc.name,
             },
             update_modified=True,
         )
