@@ -8,26 +8,35 @@ def get_context(context):
 
     q = frappe.local.form_dict
     context.redirect_to = q.get("redirect_to")
-    
-    request_id = q.get("id")
-    new_reference = q.get("reference_id")
-
+    context.is_new = True
     context.mpesa_request = {}
 
-    if request_id and not new_reference:
-        context.is_new = False
-        try:
-            load_existing(context, request_id)
-            frappe.local.form_dict = {"id": request_id, "redirect_to": context.redirect_to}
-        except Exception as e:
-            context.is_new = True
-            context.error = _("Unable to load payment request. Please try again.")
-            context.mpesa_request = {}
-            frappe.log_error(f"Mpesa STK Error", f"STK PUSH ERROR: {e}")
+    try:
+        request_id = q.get("id")
+        new_reference = q.get("reference_id")
 
-    else:
+        if request_id and not new_reference:
+            load_existing(context, request_id)
+            if context.mpesa_request:
+                context.is_new = False
+                frappe.local.form_dict = {
+                    "id": request_id,
+                    "redirect_to": context.redirect_to,
+                }
+            else:
+                setup_new_request(context, q)
+        else:
+            setup_new_request(context, q)
+
+    except Exception:
         context.is_new = True
-        setup_new_request(context, q)
+        context.error = _("Unable to load payment request. Please try again.")
+        context.mpesa_request = {}
+        frappe.log_error(frappe.get_traceback(), "Mpesa STK Page Context Error")
+        try:
+            setup_new_request(context, q)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Mpesa STK Fallback Setup Error")
 
 
 def setup_new_request(context, q):
@@ -87,21 +96,18 @@ def clean_null(v):
 def load_existing(context, id):
     try:
         doc = frappe.get_doc("Mpesa Express Request", id)
-    except frappe.PermissionError:
-        doc = frappe.get_doc("Mpesa Express Request", id, ignore_permissions=True)
 
-    try:
         context.mpesa_request = {
-            "phone_number": doc.phone_number,
-            "payment_gateway": doc.payment_gateway,
-            "reference_type": doc.reference_doctype,
-            "reference_id": doc.reference_name,
-            "base_amount": getattr(doc, "base_amount", doc.amount),
-            "amount": doc.amount,
+            "phone_number": getattr(doc, "phone_number", ""),
+            "payment_gateway": getattr(doc, "payment_gateway", ""),
+            "reference_type": getattr(doc, "reference_doctype", ""),
+            "reference_id": getattr(doc, "reference_name", ""),
+            "base_amount": getattr(doc, "base_amount", getattr(doc, "amount", 0)),
+            "amount": getattr(doc, "amount", 0),
             "currency": getattr(doc, "currency", "KES"),
-            "checkout_request_id": doc.checkout_request_id,
-            "status": doc.status,
-            "response_description": doc.response_description,
+            "checkout_request_id": getattr(doc, "checkout_request_id", ""),
+            "status": getattr(doc, "status", "In Progress"),
+            "response_description": getattr(doc, "response_description", ""),
             "title": getattr(doc, "transaction_title", ""),
             "description": getattr(doc, "transaction_description", ""),
         }
@@ -116,3 +122,8 @@ def load_existing(context, id):
         context.error = _("Request not found")
         context.is_new = True
         context.mpesa_request = {}
+    except Exception:
+        context.error = _("Unable to load payment status right now.")
+        context.is_new = True
+        context.mpesa_request = {}
+        frappe.log_error(frappe.get_traceback(), "Mpesa STK Existing Request Load Error")
