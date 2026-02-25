@@ -98,18 +98,18 @@ def load_existing(context, id):
         doc = frappe.get_doc("Mpesa Express Request", id)
 
         context.mpesa_request = {
-            "phone_number": getattr(doc, "phone_number", ""),
-            "payment_gateway": getattr(doc, "payment_gateway", ""),
-            "reference_type": getattr(doc, "reference_doctype", ""),
-            "reference_id": getattr(doc, "reference_name", ""),
-            "base_amount": getattr(doc, "base_amount", getattr(doc, "amount", 0)),
-            "amount": getattr(doc, "amount", 0),
-            "currency": getattr(doc, "currency", "KES"),
-            "checkout_request_id": getattr(doc, "checkout_request_id", ""),
-            "status": getattr(doc, "status", "In Progress"),
-            "response_description": getattr(doc, "response_description", ""),
-            "title": getattr(doc, "transaction_title", ""),
-            "description": getattr(doc, "transaction_description", ""),
+            "phone_number": str(getattr(doc, "phone_number", "") or ""),
+            "payment_gateway": str(getattr(doc, "payment_gateway", "") or ""),
+            "reference_type": str(getattr(doc, "reference_doctype", "") or ""),
+            "reference_id": str(getattr(doc, "reference_name", "") or ""),
+            "base_amount": float(getattr(doc, "base_amount", getattr(doc, "amount", 0)) or 0),
+            "amount": float(getattr(doc, "amount", 0) or 0),
+            "currency": str(getattr(doc, "currency", "KES") or "KES"),
+            "checkout_request_id": str(getattr(doc, "checkout_request_id", "") or ""),
+            "status": str(getattr(doc, "status", "In Progress") or "In Progress"),
+            "response_description": str(getattr(doc, "response_description", "") or ""),
+            "title": str(getattr(doc, "transaction_title", "") or ""),
+            "description": str(getattr(doc, "transaction_description", "") or ""),
         }
         
         if doc.status == "Completed":
