@@ -271,6 +271,25 @@ def handle_successful_transaction(request_doc, settings):
         except Exception:
             log_and_throw_error("Event Booking Submission Error", request_doc.name)
 
+    if request_doc.reference_doctype == "Service Appointment":
+        try:
+            frappe.flags.ignore_permissions = True
+            service_appointment = frappe.get_doc("Service Appointment", request_doc.reference_name)
+            service_appointment.submit()
+            service_appointment_payment = frappe.get_doc("Service Appointment Payment", {"reference_docname": service_appointment.name})
+            frappe.db.set_value(
+                "Service Appointment Payment",
+                service_appointment_payment.name,
+                {
+                    "payment_received": 1,
+                    "payment_id": request_doc.transaction_id,
+                    "payment_gateway": request_doc.payment_gateway
+                }
+            )
+            set_mpesa_request_reconciled(request_doc)
+        except Exception:
+            log_and_throw_error("Service Appointment Submission Error", request_doc.name)
+
 
 def set_mpesa_request_reconciled(request_doc): 
     request_doc.reload()
