@@ -4,8 +4,26 @@ from frappe_mpsa_payments.utils.utils import convert_amount_to_kes
 
 
 def get_context(context):
+    context.no_cache = 1
+
     q = frappe.local.form_dict
     context.redirect_to = q.get("redirect_to")
+    
+    request_id = q.get("id")
+    new_reference = q.get("reference_id")
+
+    if request_id and not new_reference:
+        context.is_new = False
+        load_existing(context, request_id)
+        frappe.local.form_dict = {"id": request_id, "redirect_to": context.redirect_to}
+
+    else:
+        context.is_new = True
+        setup_new_request(context, q)
+
+
+def setup_new_request(context, q):
+
     context.mpesa_gateways = frappe.get_all(
         "Payment Gateway",
         filters={"gateway_settings": ["is", "set"]},
@@ -28,34 +46,28 @@ def get_context(context):
     context.allow_payment_reference_editing = settings.allow_payment_reference_editing if settings else False
     
 
-    if q.get("id"):
-        context.is_new = False
-        load_existing(context, q.get("id"))
-        frappe.local.form_dict = {"id": q.get("id"), "redirect_to": context.redirect_to}
-    else:
-        context.is_new = True
-        base_amount = clean_null(q.get("base_amount") or q.get("amount"))
-        actual_amount = base_amount
+    base_amount = clean_null(q.get("base_amount") or q.get("amount"))
+    actual_amount = base_amount
 
-        if currency != "KES" and base_amount:
-            try:
-                actual_amount = convert_amount_to_kes(
-                    amount=float(base_amount), currency=currency, settings= setting_name
-                )
-            except Exception as e:
-                actual_amount = base_amount
+    if currency != "KES" and base_amount:
+        try:
+            actual_amount = convert_amount_to_kes(
+                amount=float(base_amount), currency=currency, settings= setting_name
+            )
+        except Exception as e:
+            actual_amount = base_amount
 
-        context.mpesa_request = {
-            "phone_number": clean_null(q.get("phone_number")),
-            "payment_gateway": gateway,
-            "reference_type": clean_null(q.get("reference_type")),
-            "reference_id": clean_null(q.get("reference_id")),
-            "base_amount": base_amount,
-            "currency": currency,
-            "amount": actual_amount,
-            "title": context.title,
-            "description": context.description,
-        }
+    context.mpesa_request = {
+        "phone_number": clean_null(q.get("phone_number")),
+        "payment_gateway": gateway,
+        "reference_type": clean_null(q.get("reference_type")),
+        "reference_id": clean_null(q.get("reference_id")),
+        "base_amount": base_amount,
+        "currency": currency,
+        "amount": actual_amount,
+        "title": context.title,
+        "description": context.description,
+    }
 
 
 def clean_null(v):

@@ -12,6 +12,14 @@ function getRequestId() {
 	return p.get("id");
 }
 
+function clearRequestIdFromURL() {
+	const url = new URL(window.location.href);
+	if (url.searchParams.has("id")) {
+		url.searchParams.delete("id");
+		window.history.replaceState({}, "", url.toString());
+	}
+}
+
 function showOverlay(text = "Processing...") {
 	const o = document.getElementById("overlay");
 	if (o) {
@@ -165,6 +173,7 @@ async function checkStatus() {
 
 	if (status === "Completed") {
 		stopChecking();
+		clearRequestIdFromURL();
 		const redirect_to = getRequestRedirect();
 		if (redirect_to) window.location.href = redirect_to;
 		else hideOverlay();
