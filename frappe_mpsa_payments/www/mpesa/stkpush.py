@@ -12,12 +12,17 @@ def get_context(context):
     request_id = q.get("id")
     new_reference = q.get("reference_id")
 
+    context.mpesa_request = {}
+
     if request_id and not new_reference:
         context.is_new = False
         try:
             load_existing(context, request_id)
             frappe.local.form_dict = {"id": request_id, "redirect_to": context.redirect_to}
         except Exception as e:
+            context.is_new = True
+            context.error = _("Unable to load payment request. Please try again.")
+            context.mpesa_request = {}
             frappe.log_error(f"Mpesa STK Error", f"STK PUSH ERROR: {e}")
 
     else:
@@ -82,6 +87,10 @@ def clean_null(v):
 def load_existing(context, id):
     try:
         doc = frappe.get_doc("Mpesa Express Request", id)
+    except frappe.PermissionError:
+        doc = frappe.get_doc("Mpesa Express Request", id, ignore_permissions=True)
+
+    try:
         context.mpesa_request = {
             "phone_number": doc.phone_number,
             "payment_gateway": doc.payment_gateway,
@@ -93,8 +102,8 @@ def load_existing(context, id):
             "checkout_request_id": doc.checkout_request_id,
             "status": doc.status,
             "response_description": doc.response_description,
-            "title": doc.transaction_title,
-            "description": doc.transaction_description,
+            "title": getattr(doc, "transaction_title", ""),
+            "description": getattr(doc, "transaction_description", ""),
         }
         
         if doc.status == "Completed":
