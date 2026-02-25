@@ -275,7 +275,7 @@ def handle_successful_transaction(request_doc, settings):
         try:
             frappe.flags.ignore_permissions = True
             service_appointment = frappe.get_doc("Service Appointment", request_doc.reference_name)
-            service_appointment.submit()
+            service_appointment.update_mpesa_payment_record()
             service_appointment_payment = frappe.get_doc("Service Appointment Payment", {"reference_docname": service_appointment.name})
             frappe.db.set_value(
                 "Service Appointment Payment",
