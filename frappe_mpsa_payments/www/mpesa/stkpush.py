@@ -14,8 +14,11 @@ def get_context(context):
 
     if request_id and not new_reference:
         context.is_new = False
-        load_existing(context, request_id)
-        frappe.local.form_dict = {"id": request_id, "redirect_to": context.redirect_to}
+        try:
+            load_existing(context, request_id)
+            frappe.local.form_dict = {"id": request_id, "redirect_to": context.redirect_to}
+        except Exception as e:
+            frappe.log_error(f"Mpesa STK Error", f"STK PUSH ERROR: {e}")
 
     else:
         context.is_new = True
