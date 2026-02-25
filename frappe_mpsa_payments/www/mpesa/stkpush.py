@@ -8,18 +8,37 @@ def get_context(context):
 
     q = frappe.local.form_dict
     context.redirect_to = q.get("redirect_to")
-    
+    context.is_new = True
+    context.mpesa_request = {}
+
     request_id = q.get("id")
     new_reference = q.get("reference_id")
 
     if request_id and not new_reference:
-        context.is_new = False
         load_existing(context, request_id)
-        frappe.local.form_dict = {"id": request_id, "redirect_to": context.redirect_to}
+        if context.mpesa_request:
+            context.is_new = False
+            gateway = context.mpesa_request.get("payment_gateway")
+            setup_ui_variables(context, gateway, q)
 
-    else:
-        context.is_new = True
+    if context.is_new:
         setup_new_request(context, q)
+
+def setup_ui_variables(context, gateway, q):
+    """Sets up title and permissions needed by the HTML template"""
+    settings = None
+    if gateway:
+        setting_name = setting_name = gateway.replace("Mpesa-", "")
+        if frappe.db.exists("Mpesa Settings", setting_name):
+            settings = frappe.get_doc("Mpesa Settings", setting_name)
+
+    context.title = settings.payment_page_title if settings and settings.payment_page_title else q.get("title")
+    setting_desc = settings.payment_page_description if settings else None
+    query_desc = q.get("description")
+    context.description = f"{setting_desc} - {query_desc}" if setting_desc and query_desc else (setting_desc or query_desc)
+
+    context.allow_amount_editing = settings.allow_amount_editing if settings else False
+    context.allow_payment_reference_editing = settings.allow_payment_reference_editing if settings else False
 
 
 def setup_new_request(context, q):
@@ -31,28 +50,19 @@ def setup_new_request(context, q):
         ignore_permissions=True,
     )
 
+    gateway = q.get("payment_gateway")
+    setup_ui_variables(context, gateway, q)
+
     currency = q.get("currency") or "KES"
     context.currency = currency
-    gateway = q.get("payment_gateway")
-    setting_name = gateway.replace("Mpesa-", "") if gateway else None
-    settings = frappe.get_doc("Mpesa Settings", setting_name) if setting_name else None
-
-    context.title = settings.payment_page_title if settings and settings.payment_page_title else q.get("title")
-    setting_desc = settings.payment_page_description if settings else None
-    query_desc = q.get("description")
-    context.description = f"{setting_desc} - {query_desc}" if setting_desc and query_desc else (setting_desc or query_desc)
-
-    context.allow_amount_editing = settings.allow_amount_editing if settings else False
-    context.allow_payment_reference_editing = settings.allow_payment_reference_editing if settings else False
     
-
     base_amount = clean_null(q.get("base_amount") or q.get("amount"))
     actual_amount = base_amount
 
     if currency != "KES" and base_amount:
         try:
             actual_amount = convert_amount_to_kes(
-                amount=float(base_amount), currency=currency, settings= setting_name
+                amount=float(base_amount), currency=currency, settings=gateway.replace("Mpesa-", "") if gateway else None
             )
         except Exception as e:
             actual_amount = base_amount
