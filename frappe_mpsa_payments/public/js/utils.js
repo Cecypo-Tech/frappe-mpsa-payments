@@ -19,7 +19,7 @@ mpesa_qp.show_dialog = function (
 	outstanding,
 	config,
 	initial_selections = [],
-	mop_config = null
+	mop_config = null,
 ) {
 	if (outstanding <= 0 && !initial_selections.length) {
 		frappe.msgprint(__("No outstanding amount to pay"));
@@ -27,7 +27,7 @@ mpesa_qp.show_dialog = function (
 	}
 
 	const dialog = new frappe.ui.Dialog({
-		title: mop_config ? __(`Quick Pay - ${mop_config.mop}`) : __("Quick Pay - Mpesa"),
+		title: mop_config ? __(`Mpesa C2B - ${mop_config.mop}`) : __("Mpesa C2B - Mpesa"),
 		size: "large",
 		fields: [
 			{
@@ -71,8 +71,8 @@ mpesa_qp.show_dialog = function (
 
 	dialog.fields_dict.mpesa_list.$wrapper.html(
 		`<div class="text-center text-muted p-4"><i class="fa fa-spinner fa-spin"></i> ${__(
-			"Loading…"
-		)}</div>`
+			"Loading…",
+		)}</div>`,
 	);
 	mpesa_load_payments(dialog, "");
 };
@@ -111,7 +111,7 @@ function mpesa_summary_html(frm, outstanding, mop_config) {
 					<span>${__("Already Paid")}</span>
 					<strong class="text-success">${format_currency(
 						paid,
-						frm.doc.currency
+						frm.doc.currency,
 					)} <small>(${percent}%)</small></strong>
 				</div>
 				<div class="mpesa-row mpesa-outstanding">
@@ -181,11 +181,11 @@ function mpesa_render_list(dialog) {
 
 	if (payments.length === 0 && (dialog.search_term || "").length >= 3) {
 		html += `<div class="mpesa-no-results"><i class="fa fa-search text-muted"></i><p>${__(
-			"No payments match your search"
+			"No payments match your search",
 		)}</p></div>`;
 	} else if (payments.length === 0) {
 		html += `<div class="mpesa-search-prompt"><i class="fa fa-hand-o-up text-muted"></i><p>${__(
-			"Enter a search term above to find payments"
+			"Enter a search term above to find payments",
 		)}</p></div>`;
 	} else {
 		html += `
@@ -226,8 +226,8 @@ function mpesa_render_list(dialog) {
 								${
 									is_over && !is_exact
 										? `<i class="fa fa-exclamation-triangle" title="${__(
-												"Exceeds outstanding"
-										  )}"></i>`
+												"Exceeds outstanding",
+											)}"></i>`
 										: ""
 								}
 							</span>
@@ -422,8 +422,8 @@ function mpesa_age_days(date_str, today) {
 	return Math.max(
 		0,
 		Math.floor(
-			(frappe.datetime.str_to_obj(today) - frappe.datetime.str_to_obj(date_str)) / 86400000
-		)
+			(frappe.datetime.str_to_obj(today) - frappe.datetime.str_to_obj(date_str)) / 86400000,
+		),
 	);
 }
 

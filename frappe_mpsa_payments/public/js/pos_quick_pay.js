@@ -142,7 +142,7 @@ function add_button(frm) {
 	$payment_container.prepend(`
 		<div class="mpesa-quick-pay-section">
 			<button class="btn btn-success btn-sm mpesa-quick-pay-btn w-100">
-				<i class="fa fa-mobile"></i> ${__("Quick Pay - Mpesa")}
+				<i class="fa fa-mobile"></i> ${__("Mpesa C2B")}
 			</button>
 			<div id="mpesa-selected-summary"></div>
 		</div>`);
@@ -169,7 +169,7 @@ function handle_button_click(frm) {
 		frappe.msgprint({
 			title: __("No Mpesa Payment Mode Selected"),
 			message: __(
-				"Please select an Mpesa payment method in the payment section before using Quick Pay.",
+				"Please select an Mpesa payment method in the payment section before using Mpesa C2B.",
 			),
 			indicator: "orange",
 		});

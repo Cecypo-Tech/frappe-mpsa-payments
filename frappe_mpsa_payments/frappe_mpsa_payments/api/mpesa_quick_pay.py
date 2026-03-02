@@ -171,7 +171,7 @@ def process_mpesa():
         if str(mpesa.businessshortcode or "") != meta["shortcode"]:
             frappe.log_error(
                 f"Mpesa C2B entry {mpesa_name}: invalid shortcode {mpesa.businessshortcode} (expected {meta['shortcode']})",
-                "Mpesa Quick Pay",
+                "Mpesa C2B",
             )
             continue
 
@@ -270,7 +270,7 @@ def process_mpesa():
                     result["submitted"] = True
         except Exception as e:
             frappe.log_error(
-                frappe.get_traceback(), "Mpesa Quick Pay – Invoice Save/Submit Error"
+                frappe.get_traceback(), "Mpesa C2B – Invoice Save/Submit Error"
             )
             result["error"] = str(e)
 
@@ -329,7 +329,7 @@ def update_mpesa_after_invoice_submission():
     if submitted_count != len(mpesa_names):
         frappe.log_error(
             f"Processed {submitted_count} out of {len(mpesa_names)} Mpesa payments for {doctype} {invoice_name}.",
-            "Mpesa Quick Pay",
+            "Mpesa C2B",
         )
 
     return {"success": True, "total_amount": total_amount}

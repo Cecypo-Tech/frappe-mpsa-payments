@@ -27,7 +27,7 @@ frappe.ui.form.on("Sales Invoice", {
 							function () {
 								open_stk_push_dialog(frm, response.message.amount);
 							},
-							__("Mpesa Actions"),
+							__("Lipa Na Mpesa"),
 						);
 					}
 				},
@@ -42,7 +42,7 @@ frappe.ui.form.on("Sales Invoice", {
 				callback(r) {
 					if (r.message && r.message.length > 0) {
 						frm.add_custom_button(
-							__("Quick Pay - Mpesa"),
+							__("Mpesa C2B"),
 							() => {
 								mpesa_qp.show_dialog(
 									frm,
@@ -53,7 +53,7 @@ frappe.ui.form.on("Sales Invoice", {
 									[],
 								);
 							},
-							__("Mpesa Actions"),
+							__("Lipa Na Mpesa"),
 						);
 					}
 				},
