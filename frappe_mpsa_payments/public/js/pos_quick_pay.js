@@ -81,7 +81,7 @@ for (const doctype of ["Sales Invoice", "POS Invoice"]) {
 						frappe.msgprint({
 							title: __("Warning"),
 							message: __(
-								`Mpesa payments were added to the ${frm.doctype} ${frm.doc.name}, but we couldn't finalize them after submission. Please check the linked payments.`,
+								`Mpesa payments were added to the ${frm.doctype} ${frm.doc.name}, but we couldn't finalize them after submission. Please check the linked payments.`
 							),
 							indicator: "orange",
 						});
@@ -100,17 +100,28 @@ function _resolve_doctype(callback) {
 		return;
 	}
 
-	frappe.db
-		.get_single_value("POS Settings", "invoice_type")
-		.then((value) => {
-			pos_qp.pos_doctype = value === "POS Invoice" ? "POS Invoice" : "Sales Invoice";
-			callback(pos_qp.pos_doctype);
-		})
-		.catch(() => {
-			console.error("Defaulting to POS Invoice for backward compatibility");
+	frappe.model.with_doctype("POS Settings", () => {
+		const meta = frappe.get_meta("POS Settings");
+		const has_invoice_type = meta.fields.some((f) => f.fieldname === "invoice_type");
+
+		if (!has_invoice_type) {
 			pos_qp.pos_doctype = "POS Invoice";
 			callback(pos_qp.pos_doctype);
-		});
+			return;
+		}
+
+		frappe.db
+			.get_single_value("POS Settings", "invoice_type")
+			.then((value) => {
+				pos_qp.pos_doctype = value === "POS Invoice" ? "POS Invoice" : "Sales Invoice";
+				callback(pos_qp.pos_doctype);
+			})
+			.catch(() => {
+				console.error("Defaulting to POS Invoice for backward compatibility");
+				pos_qp.pos_doctype = "POS Invoice";
+				callback(pos_qp.pos_doctype);
+			});
+	});
 }
 
 function add_button(frm) {
@@ -141,7 +152,7 @@ function add_button(frm) {
 					auto_submit_invoice: false,
 					merge_payments: true,
 				},
-				pos_qp.confirmed_selections,
+				pos_qp.confirmed_selections
 			);
 		});
 		mpesa_qp.inject_btn_styles();
@@ -165,7 +176,9 @@ function refresh_selected_summary() {
 	let html = `
         <div class="mpesa-summary-panel">
             <div class="mpesa-summary-header">
-                <span><i class="fa fa-check-circle text-success"></i> ${__("Mpesa Payments Queued")}</span>
+                <span><i class="fa fa-check-circle text-success"></i> ${__(
+					"Mpesa Payments Queued"
+				)}</span>
                 <span class="mpesa-summary-total">${format_currency(total, currency)}</span>
             </div>
             <ul class="mpesa-summary-list">`;
@@ -173,7 +186,9 @@ function refresh_selected_summary() {
 	for (const p of selections) {
 		html += `
             <li class="mpesa-summary-item" data-name="${p.name}">
-                <span class="mpesa-summary-name">${frappe.utils.escape_html(p.full_name || p.name)}</span>
+                <span class="mpesa-summary-name">${frappe.utils.escape_html(
+					p.full_name || p.name
+				)}</span>
                 <span class="mpesa-summary-amt">${format_currency(p.amount, currency)}</span>
                 <button class="mpesa-summary-remove" data-name="${p.name}" title="${__("Remove")}">
                     <i class="fa fa-times"></i>
