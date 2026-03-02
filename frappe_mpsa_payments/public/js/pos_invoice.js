@@ -15,21 +15,20 @@ frappe.ui.form.on("POS Invoice", {
 			frm.doc.outstanding_amount > 0
 		) {
 			frappe.call({
-				method: "frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_quick_pay.pos_quick_pay_mpesa_process",
+				method: "frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_quick_pay.get_mpesa_phone_mops_for_pos_profile",
 				args: {
-					action: "check_mpesa_available",
-					doctype: frm.doctype,
 					company: frm.doc.company,
+					pos_profile: frm.doc.pos_profile,
 				},
 				callback(r) {
-					if (r.message && r.message.available) {
+					if (r.message && r.message.length > 0) {
 						frm.add_custom_button(
 							__("Quick Pay - Mpesa"),
 							() => {
 								mpesa_qp.show_dialog(
 									frm,
 									"invoice",
-									mpesa_process_payments,
+									(frm, dialog) => mpesa_process_payments(frm, dialog),
 									frm.doc.outstanding_amount,
 									MPESA_FORM_CONFIG,
 									[],
@@ -44,21 +43,19 @@ frappe.ui.form.on("POS Invoice", {
 	},
 });
 
-function mpesa_process_payments(frm, dialog, outstanding) {
+function mpesa_process_payments(frm, dialog) {
 	if (!dialog.selected.length) {
 		frappe.msgprint(__("Please select at least one Mpesa payment"));
 		return;
 	}
 
 	frappe.call({
-		method: "frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_quick_pay.pos_quick_pay_mpesa_process",
+		method: "frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_quick_pay.process_mpesa",
 		args: {
-			action: "process_mpesa",
 			doctype: frm.doctype,
 			invoice_name: frm.doc.name,
 			customer: frm.doc.customer,
 			mpesa_payments: dialog.selected.map((p) => p.name).join(","),
-			outstanding_amount: outstanding,
 			auto_save: 1, // always auto save
 			auto_submit: dialog.auto_submit ? 1 : 0,
 			merge_payments: dialog.merge_payments ? 1 : 0,
