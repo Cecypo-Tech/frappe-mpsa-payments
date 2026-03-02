@@ -92,7 +92,7 @@ for (const doctype of ["Sales Invoice", "POS Invoice"]) {
 						frappe.msgprint({
 							title: __("Warning"),
 							message: __(
-								`Some Mpesa payments were added to ${frm.doctype} ${frm.doc.name} but could not be fully finalised. Please check the linked payments.`,
+								`Mpesa payments were added to the ${frm.doctype} ${frm.doc.name}, but we couldn't finalize them after submission. Please check the linked payments.`,
 							),
 							indicator: "orange",
 						});
@@ -110,17 +110,28 @@ function _resolve_doctype(callback) {
 		return;
 	}
 
-	frappe.db
-		.get_single_value("POS Settings", "invoice_type")
-		.then((value) => {
-			pos_qp.pos_doctype = value === "POS Invoice" ? "POS Invoice" : "Sales Invoice";
-			callback(pos_qp.pos_doctype);
-		})
-		.catch(() => {
-			console.error("Defaulting to POS Invoice for v15");
+	frappe.model.with_doctype("POS Settings", () => {
+		const meta = frappe.get_meta("POS Settings");
+		const has_invoice_type = meta.fields.some((f) => f.fieldname === "invoice_type");
+
+		if (!has_invoice_type) {
 			pos_qp.pos_doctype = "POS Invoice";
 			callback(pos_qp.pos_doctype);
-		});
+			return;
+		}
+
+		frappe.db
+			.get_single_value("POS Settings", "invoice_type")
+			.then((value) => {
+				pos_qp.pos_doctype = value === "POS Invoice" ? "POS Invoice" : "Sales Invoice";
+				callback(pos_qp.pos_doctype);
+			})
+			.catch(() => {
+				console.error("Defaulting to POS Invoice for backward compatibility");
+				pos_qp.pos_doctype = "POS Invoice";
+				callback(pos_qp.pos_doctype);
+			});
+	});
 }
 
 function add_button(frm) {
