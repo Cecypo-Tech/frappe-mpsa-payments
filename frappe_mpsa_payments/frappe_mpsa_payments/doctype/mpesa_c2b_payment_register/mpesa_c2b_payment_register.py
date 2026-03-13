@@ -14,6 +14,16 @@ from frappe_mpsa_payments.frappe_mpsa_payments.api.payment_entry import (
 
 class MpesaC2BPaymentRegister(Document):
     def before_insert(self):
+        if self.transid and frappe.db.exists(
+            "Mpesa C2B Payment Register",
+            {"transid": self.transid, "docstatus": ["in", [0, 1]]},
+        ):
+            frappe.log_error(
+                message=f"Blocked C2B because duplicate C2B payment detected: {self.transid} ",
+                title="Mpesa C2B Duplicate",
+            )
+            return
+
         if self.thirdpartytransid:
             er = frappe.db.get_value(
                 "Mpesa Express Request",
