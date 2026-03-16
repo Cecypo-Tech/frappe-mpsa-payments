@@ -459,6 +459,17 @@ def confirmation(**kwargs):
 
         frappe.set_user("Administrator")
 
+        if frappe.db.exists(
+            "Mpesa C2B Payment Register",
+            {"transid": args.get("TransID"), "docstatus": ["!=", 2]},
+        ):
+            frappe.log_error(
+                message=f"Blocked C2B because duplicate C2B payment detected: {args.get('TransID')}",
+                title="Mpesa C2B Duplicate",
+            )
+            context = {"ResultCode": 0, "ResultDesc": "Accepted"}
+            return dict(context)
+
         frappe.enqueue(
             "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.delayed_insert_c2b",
             queue="short",
