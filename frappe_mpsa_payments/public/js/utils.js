@@ -50,6 +50,8 @@ mpesa_qp.show_dialog = function (
 		],
 		primary_action_label: __("Add Payments"),
 		primary_action: () => process_mpesa(frm, dialog),
+		secondary_action_label: __("Request Payment"),
+		secondary_action: () => mpesa_show_request_dialog(frm, outstanding),
 	});
 
 	dialog.page = page;
@@ -415,6 +417,90 @@ function pos_payment_options(dialog) {
 
 	wrapper.find("#mpesa-merge-payments").on("change", function () {
 		dialog.merge_payments = $(this).is(":checked");
+	});
+}
+
+function mpesa_show_request_dialog(frm, outstanding) {
+	frappe.db.get_value("Customer", frm.doc.customer, ["mobile_no"], function (value) {
+		const phone = value.mobile_no || "";
+		const req = new frappe.ui.Dialog({
+			title: __("Request Mpesa Payment"),
+			fields: [
+				{
+					fieldtype: "HTML",
+					fieldname: "request_info",
+					options: `
+                            <div class="mpesa-request-info">
+                                <div class="mpesa-req-row">
+                                    <span>${__("Customer")}</span>
+                                    <strong>${frm.doc.customer_name || frm.doc.customer}</strong>
+                                </div>
+                                <div class="mpesa-req-row">
+                                    <span>${__("Amount to Request")}</span>
+                                    <strong class="text-success">${format_currency(
+										outstanding,
+										frm.doc.currency
+									)}</strong>
+                                </div>
+                            </div>`,
+				},
+				{
+					fieldtype: "Data",
+					fieldname: "phone_number",
+					label: __("Phone Number"),
+					reqd: 1,
+					default: phone,
+					description: __("Format: 0712345678 or 254712345678"),
+				},
+			],
+			primary_action_label: __("Send Request"),
+			primary_action(values) {
+				if (!values.phone_number) {
+					frappe.msgprint(__("Please enter a phone number"));
+					return;
+				}
+				frappe.call({
+					method: "frappe_mpsa_payments.frappe_mpsa_payments.api.sales_invoice.request_for_payment",
+					args: {
+						phone_number: values.phone_number,
+						doctype: frm.doctype,
+						doctype_name: frm.doc.name,
+						amount: outstanding,
+					},
+					freeze: true,
+					freeze_message: __("Sending Payment Request…"),
+					callback(r) {
+						if (r.message && r.message.success) {
+							req.hide();
+							frappe.msgprint({
+								title: __("Payment Request Sent"),
+								message: `<p>${__("Sent to")} <strong>${
+									values.phone_number
+								}</strong></p>
+                                                <a href="/app/payment-request/${
+													r.message.payment_request
+												}"
+                                                   target="_blank" class="btn btn-sm btn-primary">
+                                                    <i class="fa fa-external-link"></i> ${
+														r.message.payment_request
+													}
+                                                </a>`,
+								indicator: "green",
+							});
+							frm.reload_doc();
+						}
+					},
+					error(r) {
+						frappe.msgprint({
+							title: __("Error"),
+							message: r.message || __("Failed to send request"),
+							indicator: "red",
+						});
+					},
+				});
+			},
+		});
+		req.show();
 	});
 }
 

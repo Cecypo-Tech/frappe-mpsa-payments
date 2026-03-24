@@ -196,7 +196,6 @@ function handle_button_click(frm) {
 	// Gather any previously confirmed payments for this specific MOP
 	const existing_group = pos_qp.confirmed_selections.get(mop_config.mop);
 	const initial_selections = existing_group ? [...existing_group.payments] : [];
-	console.log("Initial selections for this MOP:", initial_selections);
 
 	const outstanding =
 		selected_mop_info.amount || flt(selected_mop_info.control?.get_value() || 0);
