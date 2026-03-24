@@ -1,5 +1,8 @@
+/* global mpesa_qp */
 frappe.provide("mpesa_qp");
+/* global pos_qp */
 frappe.provide("pos_qp");
+/* global cur_pos */
 
 pos_qp.pos_doctype = null;
 pos_qp.confirmed_selections = new Map(); // mop -> { mop, account, shortcode, payments[] }
@@ -92,7 +95,7 @@ for (const doctype of ["Sales Invoice", "POS Invoice"]) {
 						frappe.msgprint({
 							title: __("Warning"),
 							message: __(
-								`Mpesa payments were added to the ${frm.doctype} ${frm.doc.name}, but we couldn't finalize them after submission. Please check the linked payments.`,
+								`Mpesa payments were added to the ${frm.doctype} ${frm.doc.name}, but we couldn't finalize them after submission. Please check the linked payments.`
 							),
 							indicator: "orange",
 						});
@@ -169,7 +172,7 @@ function handle_button_click(frm) {
 		frappe.msgprint({
 			title: __("No Mpesa Payment Mode Selected"),
 			message: __(
-				"Please select an Mpesa payment method in the payment section before using Mpesa C2B.",
+				"Please select an Mpesa payment method in the payment section before using Mpesa C2B."
 			),
 			indicator: "orange",
 		});
@@ -183,7 +186,7 @@ function handle_button_click(frm) {
 		frappe.msgprint({
 			title: __("Payment Mode Not Mpesa"),
 			message: __(
-				`The selected payment mode "${selected_mop_info.mop_name}" is not configured for Mpesa. Please select an Mpesa-enabled payment mode.`,
+				`The selected payment mode "${selected_mop_info.mop_name}" is not configured for Mpesa. Please select an Mpesa-enabled payment mode.`
 			),
 			indicator: "red",
 		});
@@ -214,7 +217,7 @@ function handle_button_click(frm) {
 			merge_payments: true,
 		},
 		initial_selections,
-		mop_config,
+		mop_config
 	);
 }
 
@@ -346,7 +349,9 @@ function refresh_selected_summary() {
 				<li class="mpesa-summary-item" data-name="${p.name}" data-mop="${frappe.utils.escape_html(mop)}">
 					<span class="mpesa-summary-name">${frappe.utils.escape_html(p.full_name || p.name)}</span>
 					<span class="mpesa-summary-amt">${format_currency(p.amount, currency)}</span>
-					<button class="mpesa-summary-remove" data-name="${p.name}" data-mop="${frappe.utils.escape_html(mop)}" title="${__("Remove")}">
+					<button class="mpesa-summary-remove" data-name="${p.name}" data-mop="${frappe.utils.escape_html(
+				mop
+			)}" title="${__("Remove")}">
 						<i class="fa fa-times"></i>
 					</button>
 				</li>`;

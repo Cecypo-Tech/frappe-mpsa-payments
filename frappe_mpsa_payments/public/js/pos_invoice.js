@@ -1,3 +1,4 @@
+/* global mpesa_qp */
 frappe.provide("mpesa_qp");
 
 const MPESA_FORM_CONFIG = {
@@ -31,10 +32,10 @@ frappe.ui.form.on("POS Invoice", {
 									(frm, dialog) => mpesa_process_payments(frm, dialog),
 									frm.doc.outstanding_amount,
 									MPESA_FORM_CONFIG,
-									[],
+									[]
 								);
 							},
-							__("Lipa Na Mpesa"),
+							__("Lipa Na Mpesa")
 						);
 					}
 				},
@@ -68,13 +69,20 @@ function mpesa_process_payments(frm, dialog) {
 
 			let msg = `<p><strong>${__("Mpesa Payments Added Successfully")}</strong></p><ul>`;
 			(r.message.payments_added || []).forEach((p) => {
-				msg += `<li>${p.mode_of_payment}: ${format_currency(p.amount, frm.doc.currency)} – ${p.reference}</li>`;
+				msg += `<li>${p.mode_of_payment}: ${format_currency(
+					p.amount,
+					frm.doc.currency
+				)} – ${p.reference}</li>`;
 			});
 			msg += "</ul>";
 			if (r.message.saved)
-				msg += `<p class="text-success"><i class="fa fa-check"></i> ${__("Invoice saved")}</p>`;
+				msg += `<p class="text-success"><i class="fa fa-check"></i> ${__(
+					"Invoice saved"
+				)}</p>`;
 			if (r.message.submitted)
-				msg += `<p class="text-success"><i class="fa fa-check"></i> ${__("Invoice submitted")}</p>`;
+				msg += `<p class="text-success"><i class="fa fa-check"></i> ${__(
+					"Invoice submitted"
+				)}</p>`;
 			if (r.message.error)
 				msg += `<p class="text-danger"><i class="fa fa-exclamation-triangle"></i> ${r.message.error}</p>`;
 

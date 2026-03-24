@@ -1,3 +1,4 @@
+/* global mpesa_qp */
 frappe.provide("mpesa_qp");
 
 const MPESA_FORM_CONFIG = {
@@ -27,7 +28,7 @@ frappe.ui.form.on("Sales Invoice", {
 							function () {
 								open_stk_push_dialog(frm, response.message.amount);
 							},
-							__("Lipa Na Mpesa"),
+							__("Lipa Na Mpesa")
 						);
 					}
 				},
@@ -50,10 +51,10 @@ frappe.ui.form.on("Sales Invoice", {
 									(frm, dialog) => mpesa_process_payments(frm, dialog),
 									frm.doc.outstanding_amount,
 									MPESA_FORM_CONFIG,
-									[],
+									[]
 								);
 							},
-							__("Lipa Na Mpesa"),
+							__("Lipa Na Mpesa")
 						);
 					}
 				},
@@ -198,7 +199,8 @@ frappe.ui.form.on("Sales Invoice", {
 		});
 	},
 
-	insert_payment_entry: function (frm) {
+	insert_payment_entry: function (frm, payment_response) {
+		console.log("Inserting Payment Entry for Sales Invoice", frm.doc.name);
 		frappe.call({
 			method: "frappe.client.insert",
 			args: {
@@ -311,8 +313,8 @@ function initiate_stk_push_child(frm, row) {
 			if (!final_amount) {
 				frappe.msgprint(
 					__(
-						"STK Push is only supported for KES payments or if company's default currency is KES.",
-					),
+						"STK Push is only supported for KES payments or if company's default currency is KES."
+					)
 				);
 				return;
 			}
@@ -427,13 +429,20 @@ function mpesa_process_payments(frm, dialog) {
 
 			let msg = `<p><strong>${__("Mpesa Payments Added Successfully")}</strong></p><ul>`;
 			(r.message.payments_added || []).forEach((p) => {
-				msg += `<li>${p.mode_of_payment}: ${format_currency(p.amount, frm.doc.currency)} – ${p.reference}</li>`;
+				msg += `<li>${p.mode_of_payment}: ${format_currency(
+					p.amount,
+					frm.doc.currency
+				)} – ${p.reference}</li>`;
 			});
 			msg += "</ul>";
 			if (r.message.saved)
-				msg += `<p class="text-success"><i class="fa fa-check"></i> ${__("Invoice saved")}</p>`;
+				msg += `<p class="text-success"><i class="fa fa-check"></i> ${__(
+					"Invoice saved"
+				)}</p>`;
 			if (r.message.submitted)
-				msg += `<p class="text-success"><i class="fa fa-check"></i> ${__("Invoice submitted")}</p>`;
+				msg += `<p class="text-success"><i class="fa fa-check"></i> ${__(
+					"Invoice submitted"
+				)}</p>`;
 			if (r.message.error)
 				msg += `<p class="text-danger"><i class="fa fa-exclamation-triangle"></i> ${r.message.error}</p>`;
 
