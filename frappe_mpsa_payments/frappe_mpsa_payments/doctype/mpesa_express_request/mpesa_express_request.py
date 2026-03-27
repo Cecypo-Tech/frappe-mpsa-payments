@@ -21,6 +21,9 @@ from ...api.m_pesa_api import (
 class MpesaExpressRequest(Document):
 
     def set_missing_values(self):
+        if not self.request_id:
+            self.request_id = f"MPESAEXP{frappe.generate_hash(length=32)}"
+            self.route = f"/mpesa/stkpush?id={self.request_id}"
         if self.settings and not self.payment_gateway:
             self.payment_gateway = frappe.db.get_value(
                 "Payment Gateway", {"gateway_controller": self.settings}, "name"
@@ -32,7 +35,11 @@ class MpesaExpressRequest(Document):
             )
 
         if self.currency != "KES":
-            if "erpnext" not in frappe.get_installed_apps():
+            settings = frappe.get_doc(MPESA_SETTINGS_DOCTYPE, self.settings)
+            if (
+                "erpnext" not in frappe.get_installed_apps()
+                and not settings.enable_multi_currency_payments
+            ):
                 frappe.throw("Mpesa Express Requests must be in KES currency.")
 
             converted_amount = convert_amount_to_kes(self.currency, self.base_amount)
@@ -50,7 +57,7 @@ class MpesaExpressRequest(Document):
             if self.reference_doctype == "Payment Request":
                 self.validate_payment_request_amount()
 
-        if not validate_phone_number(self.phone_number):
+        if self.phone_number and not validate_phone_number(self.phone_number):
             frappe.throw(
                 "Invalid phone number format. Please ensure it is in the correct format, e.g., 254712345678."
             )
@@ -86,6 +93,12 @@ class MpesaExpressRequest(Document):
         #         )
         #     else:
         #         frappe.throw("Missing reference document to determine conversion rate.")
+
+    def before_submit(self):
+        if not self.amount or self.amount <= 0:
+            frappe.throw("Amount must be greater than zero to initiate STK Push.")
+        if not self.phone_number:
+            frappe.throw("Phone number is required to initiate STK Push.")
 
     def on_submit(self):
         self.initiate_request()
