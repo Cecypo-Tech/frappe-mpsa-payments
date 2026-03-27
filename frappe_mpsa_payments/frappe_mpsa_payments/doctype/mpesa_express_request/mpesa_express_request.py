@@ -199,6 +199,7 @@ def create_new_request(
             "status": "In Progress",
             "transaction_title": title,
             "transaction_description": description,
+            "redirect": redirect,
         }
     )
     doc.insert(ignore_permissions=True)
