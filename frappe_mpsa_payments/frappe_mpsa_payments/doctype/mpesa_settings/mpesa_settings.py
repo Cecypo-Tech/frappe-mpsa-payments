@@ -179,7 +179,7 @@ class MpesaSettings(Document):
                 cert_url,
                 self.sandbox,
             )
-            
+
         if self.exchange_rates:
             for rate in self.exchange_rates:
                 if rate.currency == "KES":
