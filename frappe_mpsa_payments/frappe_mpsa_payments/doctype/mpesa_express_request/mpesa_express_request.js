@@ -11,13 +11,8 @@ frappe.ui.form.on("Mpesa Express Request", {
 
 		autofill_gateway_settings(frm);
 
-		if (!HAS_ERPNEXT) {
-			if (frm.doc.currency && frm.doc.currency !== "KES") {
-				frm.set_value("currency", "KES");
-			}
-			frm.set_query("currency", () => ({
-				filters: [["Currency", "name", "=", "KES"]],
-			}));
+		if (frm.doc.route) {
+			frm.add_web_link(`${frm.doc.route}`, "View STK Push Page");
 		}
 
 		convertAmountToKES(frm);
@@ -61,8 +56,8 @@ frappe.ui.form.on("Mpesa Express Request", {
 								} else {
 									frappe.msgprint(
 										__(
-											"Missing ResultDesc or ResponseDescription in response."
-										)
+											"Missing ResultDesc or ResponseDescription in response.",
+										),
 									);
 								}
 							} else {
@@ -71,7 +66,7 @@ frappe.ui.form.on("Mpesa Express Request", {
 						},
 					});
 				},
-				__("Mpesa Actions")
+				__("Mpesa Actions"),
 			);
 
 			frm.add_custom_button(
@@ -103,7 +98,7 @@ frappe.ui.form.on("Mpesa Express Request", {
 						},
 					});
 				},
-				__("Mpesa Actions")
+				__("Mpesa Actions"),
 			);
 		}
 
@@ -121,7 +116,7 @@ frappe.ui.form.on("Mpesa Express Request", {
 						},
 					});
 				},
-				__("Mpesa Actions")
+				__("Mpesa Actions"),
 			);
 		}
 	},
