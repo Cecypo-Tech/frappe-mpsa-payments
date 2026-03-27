@@ -13,19 +13,27 @@
   "phone_number",
   "payment_gateway",
   "settings",
-  "reference_doctype",
-  "reference_name",
-  "transaction_title",
-  "transaction_description",
   "column_break_hakd",
   "currency",
   "base_amount",
   "amount",
+  "column_break_ieuv",
+  "reference_doctype",
+  "reference_name",
   "status",
   "is_reconciled",
+  "section_break_ztyo",
   "account_reference",
-  "timestamp",
   "transaction_desc",
+  "column_break_isef",
+  "timestamp",
+  "section_break_osqk",
+  "request_id",
+  "redirect_to",
+  "route",
+  "column_break_gdnd",
+  "transaction_title",
+  "transaction_description",
   "response_details_section",
   "merchant_request_id",
   "response_code",
@@ -269,6 +277,50 @@
    "fieldname": "transaction_description",
    "fieldtype": "Small Text",
    "label": "Transaction Description"
+  },
+  {
+   "fieldname": "request_id",
+   "fieldtype": "Data",
+   "label": "Request ID",
+   "no_copy": 1,
+   "read_only": 1,
+   "set_only_once": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "section_break_osqk",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "column_break_gdnd",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "column_break_ieuv",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_ztyo",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "column_break_isef",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "route",
+   "fieldtype": "Data",
+   "label": "Route",
+   "no_copy": 1,
+   "options": "URL",
+   "read_only": 1
+  },
+  {
+   "fieldname": "redirect_to",
+   "fieldtype": "Data",
+   "label": "Redirect to",
+   "no_copy": 1,
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
@@ -279,11 +331,11 @@
    "link_fieldname": "reference_docname"
   }
  ],
- "modified": "2026-01-02 14:06:57.029047",
+ "modified": "2026-03-26 12:54:19.965066",
  "modified_by": "Administrator",
  "module": "Frappe Mpsa Payments",
  "name": "Mpesa Express Request",
- "naming_rule": "Expression (old style)",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {
