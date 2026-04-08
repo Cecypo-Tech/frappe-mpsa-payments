@@ -51,7 +51,7 @@ mpesa_qp.show_dialog = function (
 		primary_action_label: __("Add Payments"),
 		primary_action: () => process_mpesa(frm, dialog),
 		secondary_action_label: __("Request Payment"),
-		secondary_action: () => mpesa_show_request_dialog(frm, outstanding),
+		secondary_action: () => mpesa_show_request_dialog(frm, outstanding, mop_config),
 	});
 
 	dialog.page = page;
@@ -420,7 +420,7 @@ function pos_payment_options(dialog) {
 	});
 }
 
-function mpesa_show_request_dialog(frm, outstanding) {
+function mpesa_show_request_dialog(frm, outstanding, mop_config) {
 	frappe.db.get_value("Customer", frm.doc.customer, ["mobile_no"], function (value) {
 		const phone = value.mobile_no || "";
 		const req = new frappe.ui.Dialog({
@@ -430,19 +430,25 @@ function mpesa_show_request_dialog(frm, outstanding) {
 					fieldtype: "HTML",
 					fieldname: "request_info",
 					options: `
-                            <div class="mpesa-request-info">
-                                <div class="mpesa-req-row">
-                                    <span>${__("Customer")}</span>
-                                    <strong>${frm.doc.customer_name || frm.doc.customer}</strong>
-                                </div>
-                                <div class="mpesa-req-row">
-                                    <span>${__("Amount to Request")}</span>
-                                    <strong class="text-success">${format_currency(
-										outstanding,
-										frm.doc.currency
-									)}</strong>
-                                </div>
-                            </div>`,
+						<div class="mpesa-request-info">
+							${
+								mop_config
+									? `
+							<div class="mpesa-row">
+								<span>${__("Payment Mode")}</span>
+								<strong>${frappe.utils.escape_html(mop_config.mop)}</strong>
+							</div>`
+									: ""
+							}
+							<div class="mpesa-req-row">
+								<span>${__("Customer")}</span>
+								<strong>${frm.doc.customer_name || frm.doc.customer}</strong>
+							</div>
+							<div class="mpesa-req-row">
+								<span>${__("Amount to Request")}</span>
+								<strong class="text-success">${format_currency(outstanding, frm.doc.currency)}</strong>
+							</div>
+						</div>`,
 				},
 				{
 					fieldtype: "Data",
@@ -460,34 +466,58 @@ function mpesa_show_request_dialog(frm, outstanding) {
 					return;
 				}
 				frappe.call({
-					method: "frappe_mpsa_payments.frappe_mpsa_payments.api.sales_invoice.request_for_payment",
+					method: "frappe_mpsa_payments.frappe_mpsa_payments.api.sales_invoice.initiate_invoice_stk_push",
 					args: {
+						invoice: frm.doc.name,
 						phone_number: values.phone_number,
-						doctype: frm.doctype,
-						doctype_name: frm.doc.name,
 						amount: outstanding,
+						currency: frm.doc.currency,
+						mode_of_payment: mop_config.mop,
+						company: frm.doc.company,
+						type: frm.doc.doctype,
 					},
 					freeze: true,
 					freeze_message: __("Sending Payment Request…"),
 					callback(r) {
 						if (r.message && r.message.success) {
 							req.hide();
-							frappe.msgprint({
-								title: __("Payment Request Sent"),
-								message: `<p>${__("Sent to")} <strong>${
-									values.phone_number
-								}</strong></p>
-                                                <a href="/app/payment-request/${
-													r.message.payment_request
-												}"
-                                                   target="_blank" class="btn btn-sm btn-primary">
-                                                    <i class="fa fa-external-link"></i> ${
-														r.message.payment_request
-													}
-                                                </a>`,
-								indicator: "green",
+
+							frappe.show_alert(
+								{
+									message: __("STK Push sent to {0}. Processing Payment...", [
+										values.phone_number,
+									]),
+									indicator: "blue",
+								},
+								10
+							);
+
+							frappe.realtime.on("mpesa_payment_completed", (data) => {
+								if (data.reference_name === frm.doc.name) {
+									frappe.realtime.off("mpesa_payment_completed");
+
+									frappe.show_alert(
+										{
+											message: __("Payment Received! Transaction: {0}", [
+												data.transaction_id,
+											]),
+											indicator: "green",
+										},
+										7
+									);
+
+									frm.reload_doc().then(() => {
+										if (
+											frm.page.get_primary_action_text() ===
+											__("Complete Order")
+										) {
+											frm.page.trigger_primary_action();
+										}
+									});
+
+									frappe.utils.play_sound("submit");
+								}
 							});
-							frm.reload_doc();
 						}
 					},
 					error(r) {
