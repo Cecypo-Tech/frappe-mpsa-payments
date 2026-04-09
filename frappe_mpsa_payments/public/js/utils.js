@@ -477,9 +477,9 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config) {
 						type: frm.doc.doctype,
 					},
 					freeze: true,
-					freeze_message: __("Sending Payment Request…"),
+					freeze_message: __("Processing Payment..."),
 					callback(r) {
-						if (r.message && r.message.success) {
+						if (r.message && r.message.status === "success") {
 							req.hide();
 
 							frappe.show_alert(
@@ -489,12 +489,18 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config) {
 									]),
 									indicator: "blue",
 								},
-								10
+								5
 							);
 
-							frappe.realtime.on("mpesa_payment_completed", (data) => {
+							const handler = (data) => {
 								if (data.reference_name === frm.doc.name) {
-									frappe.realtime.off("mpesa_payment_completed");
+									frappe.realtime.off("mpesa_stk_payment_completed", handler);
+
+									try {
+										req.hide();
+									} catch (e) {
+										console.error(e);
+									}
 
 									frappe.show_alert(
 										{
@@ -517,7 +523,8 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config) {
 
 									frappe.utils.play_sound("submit");
 								}
-							});
+							};
+							frappe.realtime.on("mpesa_stk_payment_completed", handler);
 						}
 					},
 					error(r) {
