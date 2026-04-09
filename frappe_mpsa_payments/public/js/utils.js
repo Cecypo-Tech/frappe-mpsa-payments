@@ -494,6 +494,7 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config) {
 
 							const handler = (data) => {
 								if (data.reference_name === frm.doc.name) {
+									console.log("Debug Statement: ", data);
 									frappe.realtime.off("mpesa_stk_payment_completed", handler);
 
 									try {
@@ -512,14 +513,8 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config) {
 										7
 									);
 
-									frm.reload_doc().then(() => {
-										if (
-											frm.page.get_primary_action_text() ===
-											__("Complete Order")
-										) {
-											frm.page.trigger_primary_action();
-										}
-									});
+									frm.refresh();
+									console.log("Debug Statement: ", frm.doc);
 
 									frappe.utils.play_sound("submit");
 								}
