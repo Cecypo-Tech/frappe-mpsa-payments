@@ -1,7 +1,7 @@
 import frappe
-from .patches.mpesa_custom_fields import create_custom_pos_fields
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+from .patches.mpesa_custom_fields import create_custom_pos_fields
 
 MODULE = "Frappe Mpsa Payments"
 
@@ -122,7 +122,7 @@ def create_custom_erpnext_fields():
                 "options": "B2C Payment Disbursement",
             }
         ],
-        "Sales Invoice": [
+        "Sales Invoice": [  # noqa: F601
             {
                 "fieldname": "initiate_stk_push",
                 "label": "Initiate STK Push",
@@ -280,6 +280,14 @@ def create_custom_erpnext_fields():
                 "options": "Payment Entry",
                 "read_only": 1,
                 "insert_after": "submit_payment",
+            },
+            {
+                "fieldname": "currency",
+                "fieldtype": "Link",
+                "label": "Currency",
+                "options": "Currency",
+                "read_only": 1,
+                "insert_after": "mode_of_payment",
             },
         ],
         "Mpesa C2B Payment Register URL": [
