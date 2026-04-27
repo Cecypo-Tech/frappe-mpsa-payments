@@ -67,14 +67,6 @@ def create_custom_hrms_fields():
 
 def create_custom_erpnext_fields():
     custom_fields = {
-        "Sales Invoice": [
-            {
-                "fieldname": "mpesa_payments",
-                "label": "Fetch Mpesa Payments",
-                "fieldtype": "Button",
-                "insert_after": "payments_section",
-            }
-        ],
         "Sales Invoice Payment": [
             {
                 "fieldname": "phone_number",
@@ -120,16 +112,6 @@ def create_custom_erpnext_fields():
                 "fieldtype": "Link",
                 "insert_after": "reference_detail_no",
                 "options": "B2C Payment Disbursement",
-            }
-        ],
-        "Sales Invoice": [  # noqa: F601
-            {
-                "fieldname": "initiate_stk_push",
-                "label": "Initiate STK Push",
-                "fieldtype": "Button",
-                "insert_after": "base_paid_amount",
-                "depends_on": "eval:doc.is_pos===1",
-                "hidden": 1,
             }
         ],
         "Payment Request": [
