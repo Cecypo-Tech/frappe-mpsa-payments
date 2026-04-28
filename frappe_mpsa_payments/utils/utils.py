@@ -1,11 +1,11 @@
+import re
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Generator
+from urllib.parse import urlparse
 
-import re
 import frappe
 from frappe import _
-from urllib.parse import urlparse
 from frappe.utils import get_request_site_address
 
 from .doctype_names import ACCESS_TOKENS_DOCTYPE, MPESA_EXPRESS_REQUEST_DOCTYPE
@@ -170,11 +170,11 @@ def log_and_throw_error(err_msg, context=None):
 def handle_successful_transaction(request_doc, settings):
     """Handle actions for a successful transaction"""
     if request_doc.get("reference_doctype") and request_doc.get("reference_name"):
-            frappe.get_doc(
-                request_doc.get("reference_doctype"), request_doc.get("reference_name")
-            ).run_method("on_payment_authorized", "Completed") 
-            set_mpesa_request_reconciled(request_doc)  
-            frappe.db.commit()
+        frappe.get_doc(
+            request_doc.get("reference_doctype"), request_doc.get("reference_name")
+        ).run_method("on_payment_authorized", "Completed")
+        set_mpesa_request_reconciled(request_doc)
+        frappe.db.commit()
 
     if "erpnext" in frappe.get_installed_apps():
         if request_doc.reference_doctype == "Payment Request":
@@ -222,23 +222,59 @@ def handle_successful_transaction(request_doc, settings):
 
         elif request_doc.reference_doctype == "Sales Invoice":
             sales_invoice = frappe.get_doc("Sales Invoice", request_doc.reference_name)
-            if sales_invoice.docstatus == 0:
+
+            if sales_invoice.get("is_created_using_pos"):
+                # Mark payment as received but don't modify the invoice during checkout
+                # The POS form will handle payment rows when it submits
+                if sales_invoice.docstatus == 0:
+                    # Invoice is still in draft (being edited in POS), just mark the request as reconciled
+                    set_mpesa_request_reconciled(request_doc)
+                else:
+                    # Invoice is already submitted, add payment row
+                    found_payment = False
+                    for pay in sales_invoice.payments:
+                        if pay.mode_of_payment == request_doc.payment_gateway:
+                            pay.phone_number = request_doc.phone_number
+                            pay.amount = float(request_doc.amount)
+                            pay.reference_no = request_doc.transaction_id
+                            pay.clearance_date = frappe.utils.nowdate()
+                            found_payment = True
+                            break
+
+                    if not found_payment:
+                        sales_invoice.append(
+                            "payments",
+                            {
+                                "mode_of_payment": request_doc.payment_gateway,
+                                "phone_number": request_doc.phone_number,
+                                "amount": float(request_doc.amount),
+                                "reference_no": request_doc.transaction_id,
+                                "clearance_date": frappe.utils.nowdate(),
+                            },
+                        )
+
+                    sales_invoice.save(ignore_permissions=True)
+                    set_mpesa_request_reconciled(request_doc)
+            else:
+                if sales_invoice.docstatus == 0:
+                    try:
+                        sales_invoice.submit()
+                    except Exception:
+                        log_and_throw_error(
+                            "Sales Invoice Submission Error", request_doc.name
+                        )
                 try:
-                    sales_invoice.submit()
+                    payment_row = sales_invoice.append("payments", {})
+                    payment_row.amount = float(request_doc.amount)
+                    payment_row.mode_of_payment = request_doc.payment_gateway
+                    payment_row.reference_no = request_doc.transaction_id
+                    payment_row.clearance_date = frappe.utils.nowdate()
                 except Exception:
-                    log_and_throw_error(
-                        "Sales Invoice Submission Error", request_doc.name
-                    )
-            try:
-                payment_row = sales_invoice.append("payments", {})
-                payment_row.amount = float(request_doc.amount)
-                payment_row.mode_of_payment = request_doc.payment_gateway
-                payment_row.reference_no = request_doc.transaction_id
-                payment_row.clearance_date = frappe.utils.nowdate()
+                    log_and_throw_error("Payment Creation Error", request_doc.name)
+
                 sales_invoice.save(ignore_permissions=True)
                 set_mpesa_request_reconciled(request_doc)
-            except Exception:
-                log_and_throw_error("Payment Creation Error", request_doc.name)
+
         elif request_doc.reference_doctype == "Sales Invoice Payment":
             try:
                 frappe.db.set_value(
@@ -258,21 +294,36 @@ def handle_successful_transaction(request_doc, settings):
             frappe.flags.ignore_permissions = True
             event_booking = frappe.get_doc("Event Booking", request_doc.reference_name)
             event_booking.submit()
-            event_payment = frappe.get_doc("Event Payment", {"reference_docname": event_booking.name, "reference_doctype": "Event Booking"})
+            event_payment = frappe.get_doc(
+                "Event Payment",
+                {
+                    "reference_docname": event_booking.name,
+                    "reference_doctype": "Event Booking",
+                },
+            )
             frappe.db.set_value(
                 "Event Payment",
                 event_payment.name,
-                {
-                    "payment_received": 1,
-                    "payment_id": request_doc.transaction_id
-                },
+                {"payment_received": 1, "payment_id": request_doc.transaction_id},
             )
             set_mpesa_request_reconciled(request_doc)
         except Exception:
             log_and_throw_error("Event Booking Submission Error", request_doc.name)
 
+    frappe.publish_realtime(
+        event="mpesa_stk_payment_completed",
+        message={
+            "status": "Success",
+            "reference_doctype": request_doc.reference_doctype,
+            "reference_name": request_doc.reference_name,
+            "transaction_id": request_doc.transaction_id,
+            "amount": request_doc.amount,
+        },
+        user=frappe.session.user,
+    )
 
-def set_mpesa_request_reconciled(request_doc): 
+
+def set_mpesa_request_reconciled(request_doc):
     request_doc.reload()
     request_doc.is_reconciled = 1
     request_doc.save(ignore_permissions=True)
@@ -307,7 +358,9 @@ def get_mode_of_payment_account(mode_of_payment: str, company: str) -> str:
 
 
 @frappe.whitelist(allow_guest=True)
-def convert_amount_to_kes(currency: str, amount: float, date: str = None, settings: str = None) -> float | None:
+def convert_amount_to_kes(
+    currency: str, amount: float, date: str = None, settings: str = None
+) -> float | None:
     """
     Convert the given amount from `currency` to KES.
 
@@ -344,4 +397,3 @@ def convert_amount_to_kes(currency: str, amount: float, date: str = None, settin
         return float(amount) * float(conversion_rate)
 
     return None
-

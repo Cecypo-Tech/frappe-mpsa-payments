@@ -39,7 +39,7 @@ fixtures = [
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/frappe_mpsa_payments/css/frappe_mpsa_payments.css"
-# app_include_js = "/assets/frappe_mpsa_payments/js/frappe_mpsa_payments.js"
+app_include_js = "/assets/frappe_mpsa_payments/js/utils.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/frappe_mpsa_payments/css/frappe_mpsa_payments.css"
@@ -53,12 +53,13 @@ fixtures = [
 # webform_include_css = {"doctype": "public/css/doctype.css"}
 
 # include js in page
-# page_js = {"page" : "public/js/file.js"}
+page_js = {"point-of-sale": "public/js/pos_quick_pay.js"}
 
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}
 doctype_js = {
     "Sales Invoice": "public/js/sales_invoice.js",
+    "POS Invoice": "public/js/pos_invoice.js",
     "Payment Request": "public/js/payment_request.js",
 }
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
