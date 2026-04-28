@@ -19,7 +19,6 @@ from ...utils.encoding_initiator_password import (
 )
 from ...utils.utils import (
     build_callback_url,
-    handle_successful_transaction,
     log_and_throw_error,
     update_mpesa_request_status,
 )
@@ -368,7 +367,7 @@ def stk_push_callback(**kwargs) -> None:
 
         request_doc = frappe.get_doc(
             MPESA_EXPRESS_REQUEST_DOCTYPE, {"checkout_request_id": checkout_request_id}
-        ) 
+        )
 
         update_mpesa_request_status(
             request_doc.name,
@@ -379,6 +378,25 @@ def stk_push_callback(**kwargs) -> None:
                 "transaction_date": metadata_dict.get("TransactionDate"),
                 "status": status,
             },
+        )
+
+        realtime_payload = {
+            "status": status,
+            "request_name": request_doc.name,
+            "reference_doctype": request_doc.reference_doctype,
+            "reference_name": request_doc.reference_name,
+            "transaction_id": metadata_dict.get("MpesaReceiptNumber"),
+            "amount": request_doc.amount,
+            "result_desc": transaction_response.get("ResultDesc"),
+        }
+        frappe.publish_realtime(
+            event="mpesa_stk_payment_completed",
+            message=realtime_payload,
+            user=request_doc.owner,
+        )
+        frappe.publish_realtime(
+            event="mpesa_stk_payment_completed",
+            message=realtime_payload,
         )
 
         request_doc.validate_duplicate_c2b_records()
@@ -405,7 +423,7 @@ def stk_push_callback(**kwargs) -> None:
             },
         )
 
-        if status == "Completed": 
+        if status == "Completed":
             request_doc.reconcile_payment()
 
         if "erpnext" in frappe.get_installed_apps():
@@ -417,7 +435,6 @@ def stk_push_callback(**kwargs) -> None:
 
 
 def publish_stk_status(status: str, payment_request):
-
     expected_token = frappe.db.get_value(
         "Payment Request", payment_request, "payment_token"
     )
