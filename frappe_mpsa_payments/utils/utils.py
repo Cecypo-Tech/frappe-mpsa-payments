@@ -224,28 +224,37 @@ def handle_successful_transaction(request_doc, settings):
             sales_invoice = frappe.get_doc("Sales Invoice", request_doc.reference_name)
 
             if sales_invoice.get("is_created_using_pos"):
-                found_payment = False
-                for pay in sales_invoice.payments:
-                    if pay.mode_of_payment == request_doc.payment_gateway:
-                        pay.phone_number = request_doc.phone_number
-                        pay.amount = float(request_doc.amount)
-                        pay.reference_no = request_doc.transaction_id
-                        pay.clearance_date = frappe.utils.nowdate()
-                        found_payment = True
-                        break
+                # Mark payment as received but don't modify the invoice during checkout
+                # The POS form will handle payment rows when it submits
+                if sales_invoice.docstatus == 0:
+                    # Invoice is still in draft (being edited in POS), just mark the request as reconciled
+                    set_mpesa_request_reconciled(request_doc)
+                else:
+                    # Invoice is already submitted, add payment row
+                    found_payment = False
+                    for pay in sales_invoice.payments:
+                        if pay.mode_of_payment == request_doc.payment_gateway:
+                            pay.phone_number = request_doc.phone_number
+                            pay.amount = float(request_doc.amount)
+                            pay.reference_no = request_doc.transaction_id
+                            pay.clearance_date = frappe.utils.nowdate()
+                            found_payment = True
+                            break
 
-                if not found_payment:
-                    sales_invoice.append(
-                        "payments",
-                        {
-                            "mode_of_payment": request_doc.payment_gateway,
-                            "phone_number": request_doc.phone_number,
-                            "amount": float(request_doc.amount),
-                            "reference_no": request_doc.transaction_id,
-                            "clearance_date": frappe.utils.nowdate(),
-                        },
-                    )
+                    if not found_payment:
+                        sales_invoice.append(
+                            "payments",
+                            {
+                                "mode_of_payment": request_doc.payment_gateway,
+                                "phone_number": request_doc.phone_number,
+                                "amount": float(request_doc.amount),
+                                "reference_no": request_doc.transaction_id,
+                                "clearance_date": frappe.utils.nowdate(),
+                            },
+                        )
 
+                    sales_invoice.save(ignore_permissions=True)
+                    set_mpesa_request_reconciled(request_doc)
             else:
                 if sales_invoice.docstatus == 0:
                     try:
@@ -263,8 +272,8 @@ def handle_successful_transaction(request_doc, settings):
                 except Exception:
                     log_and_throw_error("Payment Creation Error", request_doc.name)
 
-            sales_invoice.save(ignore_permissions=True)
-            set_mpesa_request_reconciled(request_doc)
+                sales_invoice.save(ignore_permissions=True)
+                set_mpesa_request_reconciled(request_doc)
 
         elif request_doc.reference_doctype == "Sales Invoice Payment":
             try:
