@@ -310,16 +310,27 @@ def handle_successful_transaction(request_doc, settings):
         except Exception:
             log_and_throw_error("Event Booking Submission Error", request_doc.name)
 
+    event_payload = {
+        "status": "Success",
+        "request_name": request_doc.name,
+        "reference_doctype": request_doc.reference_doctype,
+        "reference_name": request_doc.reference_name,
+        "transaction_id": request_doc.transaction_id,
+        "amount": request_doc.amount,
+        "phone_number": request_doc.phone_number,
+    }
+
+    # Publish to the request owner first so POS clients subscribed as cashier receive updates.
     frappe.publish_realtime(
         event="mpesa_stk_payment_completed",
-        message={
-            "status": "Success",
-            "reference_doctype": request_doc.reference_doctype,
-            "reference_name": request_doc.reference_name,
-            "transaction_id": request_doc.transaction_id,
-            "amount": request_doc.amount,
-        },
-        user=frappe.session.user,
+        message=event_payload,
+        user=request_doc.owner,
+    )
+
+    # Keep a global event for integrations that are not user-room specific.
+    frappe.publish_realtime(
+        event="mpesa_stk_payment_completed",
+        message=event_payload,
     )
 
 
