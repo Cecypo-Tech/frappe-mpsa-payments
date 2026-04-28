@@ -28,6 +28,16 @@ mpesa_qp.close_active_dialogs = function () {
 		mpesa_qp.active_dialogs[key] = null;
 	}
 
+	$(".modal[data-mpesa-dialog], .modal[data-mpesa-dialog] .modal").each(function () {
+		const $modal = $(this).closest(".modal");
+		try {
+			$modal.modal("hide");
+		} catch (error) {
+			console.error(error);
+		}
+		$modal.removeClass("in show").hide().remove();
+	});
+
 	$("body").removeClass("modal-open");
 	$(".modal-backdrop").remove();
 };
@@ -101,6 +111,7 @@ mpesa_qp.show_dialog = function (
 	mpesa_qp.active_dialogs.c2b = dialog;
 
 	dialog.$wrapper.find(".modal-dialog").css("max-width", "800px");
+	dialog.$wrapper.attr("data-mpesa-dialog", "c2b");
 	dialog.$wrapper.on("hidden.bs.modal", () => {
 		if (mpesa_qp.active_dialogs.c2b === dialog) {
 			mpesa_qp.active_dialogs.c2b = null;
@@ -617,6 +628,7 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config, parent_dialog =
 			},
 		});
 		mpesa_qp.active_dialogs.request = req;
+		req.$wrapper.attr("data-mpesa-dialog", "request");
 		req.$wrapper.on("hidden.bs.modal", () => {
 			if (mpesa_qp.active_dialogs.request === req) {
 				mpesa_qp.active_dialogs.request = null;
