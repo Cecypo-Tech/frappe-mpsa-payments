@@ -33,6 +33,7 @@ from ....utils.doctype_names import (
     PUBLIC_CERTIFICATES_DOCTYPE,
 )
 from ....utils.utils import (
+    convert_amount_to_kes,
     create_payment_gateway_account,
     erpnext_app_import_guard,
     validate_phone_number,
@@ -99,24 +100,43 @@ class MpesaSettings(Document):
 
     def get_payment_url(self, **kwargs):
         phone = kwargs.get("phone") or kwargs.get("phone_number") or ""
+        base_amount = kwargs.get("amount", 0.0)
+        currency = kwargs.get("currency", "KES")
+        setting_name = self.name
+        actual_amount = base_amount
 
-        query_params = {
-            "phone_number": phone,
-            "payment_gateway": kwargs.get("payment_gateway"),
-            "reference_type": kwargs.get("reference_doctype"),
-            "reference_id": kwargs.get("reference_docname"),
-            "title": kwargs.get("title"),
-            "description": kwargs.get("description"),
-            "payment": kwargs.get("payment"),
-            "currency": kwargs.get("currency"),
-            "amount": kwargs.get("amount"),
-            "redirect_to": kwargs.get("redirect_to"),
-        }
+        if currency != "KES" and base_amount:
+            try:
+                actual_amount = convert_amount_to_kes(
+                    amount=float(base_amount), currency=currency, settings=setting_name
+                )
+            except Exception as e:
+                actual_amount = base_amount
 
+        express_request = frappe.get_doc(
+            {
+                "doctype": MPESA_EXPRESS_REQUEST_DOCTYPE,
+                "payment_gateway": kwargs.get("payment_gateway"),
+                "reference_doctype": kwargs.get("reference_doctype"),
+                "reference_name": kwargs.get("reference_docname"),
+                "transaction_title": kwargs.get("title"),
+                "transaction_description": kwargs.get("description"),
+                "base_amount": base_amount,
+                "currency": currency,
+                "amount": actual_amount,
+                "status": "In Progress",
+                "redirect_to": kwargs.get("redirect_to"),
+                "title": kwargs.get("title"),
+                "description": kwargs.get("description"),
+            }
+        )
 
-        encoded_params = urllib.parse.urlencode(query_params)
+        if phone:
+            express_request.phone_number = sanitize_mobile_number(phone)
 
-        return get_url(f"./mpesa/stkpush?{encoded_params}")
+        express_request.insert(ignore_permissions=True)
+
+        return get_url(f"{express_request.route}")
 
     def on_update(self) -> None:
         """On Update Hook"""
@@ -159,7 +179,7 @@ class MpesaSettings(Document):
                 cert_url,
                 self.sandbox,
             )
-            
+
         if self.exchange_rates:
             for rate in self.exchange_rates:
                 if rate.currency == "KES":
