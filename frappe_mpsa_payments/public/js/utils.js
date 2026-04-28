@@ -1,6 +1,37 @@
 /* global mpesa_qp */
 frappe.provide("mpesa_qp");
 
+mpesa_qp.active_dialogs = mpesa_qp.active_dialogs || {
+	c2b: null,
+	request: null,
+};
+mpesa_qp.pending_stk_request = mpesa_qp.pending_stk_request || null;
+
+mpesa_qp.close_active_dialogs = function () {
+	for (const key of ["request", "c2b"]) {
+		const dialog = mpesa_qp.active_dialogs[key];
+		if (!dialog) continue;
+
+		try {
+			dialog.hide?.();
+		} catch (error) {
+			console.error(error);
+		}
+
+		try {
+			dialog.$wrapper?.modal("hide");
+			dialog.$wrapper?.removeClass("in show").hide();
+		} catch (error) {
+			console.error(error);
+		}
+
+		mpesa_qp.active_dialogs[key] = null;
+	}
+
+	$("body").removeClass("modal-open");
+	$(".modal-backdrop").remove();
+};
+
 /**
  * Show the Mpesa Quick Pay dialog.
  *
@@ -67,8 +98,17 @@ mpesa_qp.show_dialog = function (
 	dialog.search_term = "";
 	dialog.selected = Array.isArray(initial_selections) ? [...initial_selections] : [];
 	dialog.mpesa_data = { count: 0, payments: [] };
+	mpesa_qp.active_dialogs.c2b = dialog;
 
 	dialog.$wrapper.find(".modal-dialog").css("max-width", "800px");
+	dialog.$wrapper.on("hidden.bs.modal", () => {
+		if (mpesa_qp.active_dialogs.c2b === dialog) {
+			mpesa_qp.active_dialogs.c2b = null;
+		}
+		if (!mpesa_qp.active_dialogs.request) {
+			mpesa_qp.pending_stk_request = null;
+		}
+	});
 	dialog.show();
 	mpesa_inject_dialog_styles();
 
@@ -421,6 +461,17 @@ function pos_payment_options(dialog) {
 }
 
 function mpesa_show_request_dialog(frm, outstanding, mop_config, parent_dialog = null) {
+	if (mpesa_qp.pending_stk_request?.invoice === frm.doc.name) {
+		frappe.show_alert(
+			{
+				message: __("An STK push is already pending for this order."),
+				indicator: "orange",
+			},
+			5
+		);
+		return;
+	}
+
 	frappe.db.get_value("Customer", frm.doc.customer, ["mobile_no"], function (value) {
 		const phone = value.mobile_no || "";
 		const req = new frappe.ui.Dialog({
@@ -465,6 +516,18 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config, parent_dialog =
 					frappe.msgprint(__("Please enter a phone number"));
 					return;
 				}
+
+				if (mpesa_qp.pending_stk_request?.invoice === frm.doc.name) {
+					frappe.show_alert(
+						{
+							message: __("An STK push is already pending for this order."),
+							indicator: "orange",
+						},
+						5
+					);
+					return;
+				}
+
 				frappe.call({
 					method: "frappe_mpsa_payments.frappe_mpsa_payments.api.sales_invoice.initiate_invoice_stk_push",
 					args: {
@@ -480,6 +543,16 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config, parent_dialog =
 					freeze_message: __("Processing Payment..."),
 					callback(r) {
 						if (r.message && r.message.status === "success") {
+							mpesa_qp.pending_stk_request = {
+								invoice: frm.doc.name,
+								phone_number: values.phone_number,
+							};
+
+							if (parent_dialog?.get_secondary_btn) {
+								const button = parent_dialog.get_secondary_btn();
+								button?.prop("disabled", true).text(__("Waiting for Payment..."));
+							}
+
 							req.hide();
 
 							frappe.show_alert(
@@ -493,9 +566,13 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config, parent_dialog =
 							);
 
 							const handler = (data) => {
-								if (data.reference_name === frm.doc.name) {
+								if (
+									data.reference_doctype === frm.doc.doctype &&
+									data.reference_name === frm.doc.name
+								) {
 									console.log("Debug Statement: ", data);
 									frappe.realtime.off("mpesa_stk_payment_completed", handler);
+									mpesa_qp.pending_stk_request = null;
 
 									try {
 										req.hide();
@@ -503,11 +580,7 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config, parent_dialog =
 										console.error(e);
 									}
 
-									try {
-										parent_dialog?.hide();
-									} catch (e) {
-										console.error(e);
-									}
+									mpesa_qp.close_active_dialogs();
 
 									frappe.show_alert(
 										{
@@ -529,6 +602,11 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config, parent_dialog =
 						}
 					},
 					error(r) {
+						mpesa_qp.pending_stk_request = null;
+						if (parent_dialog?.get_secondary_btn) {
+							const button = parent_dialog.get_secondary_btn();
+							button?.prop("disabled", false).text(__("Request Payment"));
+						}
 						frappe.msgprint({
 							title: __("Error"),
 							message: r.message || __("Failed to send request"),
@@ -537,6 +615,12 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config, parent_dialog =
 					},
 				});
 			},
+		});
+		mpesa_qp.active_dialogs.request = req;
+		req.$wrapper.on("hidden.bs.modal", () => {
+			if (mpesa_qp.active_dialogs.request === req) {
+				mpesa_qp.active_dialogs.request = null;
+			}
 		});
 		req.show();
 	});

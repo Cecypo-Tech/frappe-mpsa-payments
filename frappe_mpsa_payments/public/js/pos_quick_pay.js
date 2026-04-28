@@ -8,6 +8,7 @@ pos_qp.pos_doctype = null;
 pos_qp.confirmed_selections = new Map(); // mop -> { mop, account, shortcode, payments[] }
 pos_qp._last_active_mop = null;
 pos_qp.main_dialog = null; // Store reference to main Mpesa C2B dialog
+pos_qp._payment_listener_bound = false;
 
 for (const doctype of ["Sales Invoice", "POS Invoice"]) {
 	frappe.ui.form.on(doctype, {
@@ -15,17 +16,19 @@ for (const doctype of ["Sales Invoice", "POS Invoice"]) {
 			const company = frm.doc?.company;
 			if (!company) return;
 
-			// Listen for successful Mpesa payment to close dialogs
-			frappe.realtime.on("mpesa_stk_payment_completed", function (data) {
-				if (
-					data.reference_doctype === frm.doctype &&
-					data.reference_name === frm.doc.name
-				) {
-					// Close any open dialogs to allow user to complete order
-					close_all_mpesa_dialogs();
-					clear_mpesa_state();
-				}
-			});
+			if (!pos_qp._payment_listener_bound) {
+				frappe.realtime.on("mpesa_stk_payment_completed", function (data) {
+					if (
+						cur_pos?.frm &&
+						data.reference_doctype === cur_pos.frm.doctype &&
+						data.reference_name === cur_pos.frm.doc.name
+					) {
+						mpesa_qp.close_active_dialogs?.();
+						clear_mpesa_state();
+					}
+				});
+				pos_qp._payment_listener_bound = true;
+			}
 
 			_resolve_doctype((resolved_doctype) => {
 				const pos_profile = frm.doc?.pos_profile || null;
