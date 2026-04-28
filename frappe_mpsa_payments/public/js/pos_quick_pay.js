@@ -7,12 +7,25 @@ frappe.provide("pos_qp");
 pos_qp.pos_doctype = null;
 pos_qp.confirmed_selections = new Map(); // mop -> { mop, account, shortcode, payments[] }
 pos_qp._last_active_mop = null;
+pos_qp.main_dialog = null; // Store reference to main Mpesa C2B dialog
 
 for (const doctype of ["Sales Invoice", "POS Invoice"]) {
 	frappe.ui.form.on(doctype, {
 		refresh(frm) {
 			const company = frm.doc?.company;
 			if (!company) return;
+
+			// Listen for successful Mpesa payment to close dialogs
+			frappe.realtime.on("mpesa_stk_payment_completed", function (data) {
+				if (
+					data.reference_doctype === frm.doctype &&
+					data.reference_name === frm.doc.name
+				) {
+					// Close any open dialogs to allow user to complete order
+					close_all_mpesa_dialogs();
+					clear_mpesa_state();
+				}
+			});
 
 			_resolve_doctype((resolved_doctype) => {
 				const pos_profile = frm.doc?.pos_profile || null;
@@ -39,6 +52,25 @@ for (const doctype of ["Sales Invoice", "POS Invoice"]) {
 			if (!pos_qp.confirmed_selections.size) return;
 			console.log("Final confirmed selections before submit:", pos_qp.confirmed_selections);
 			console.log(pos_qp.confirmed_selections.size);
+
+			// Reload the document to sync with any external changes (e.g., from payment callback)
+			frappe.call({
+				method: "frappe.client.get",
+				args: {
+					doctype: frm.doctype,
+					name: frm.docname,
+				},
+				async: false,
+				callback(r) {
+					if (r.message) {
+						// Update form with latest state
+						frm.doc = r.message;
+						frm.refresh();
+						// Update dirty flag to match actual state
+						frm.dirty();
+					}
+				},
+			});
 
 			// For each MOP group, add payment rows
 			for (const [mop, group] of pos_qp.confirmed_selections) {
@@ -388,5 +420,37 @@ function refresh_selected_summary() {
 
 function clear_mpesa_state() {
 	pos_qp.confirmed_selections = new Map();
+	pos_qp.main_dialog = null;
 	refresh_selected_summary();
+}
+
+function close_all_mpesa_dialogs() {
+	// Close any visible Mpesa-related dialogs
+	$(".frappe-control.modal").each(function () {
+		const $el = $(this);
+		const title = $el.find(".modal-header .modal-title").text();
+
+		// Close if it's related to Mpesa payment dialogs
+		if (title.includes("Mpesa") || title.includes("Payment") || title.includes("STK")) {
+			const instance = $el.data("frappe_dialog") || $el.closest(".modal").data("instance");
+			if (instance && typeof instance.hide === "function") {
+				instance.hide();
+			} else {
+				// Fallback: just hide the modal
+				$el.closest(".modal").modal("hide");
+			}
+		}
+	});
+
+	// Also try to close using Frappe's dialog registry if available
+	if (frappe.ui && frappe.ui.form && frappe.ui.form._dialogs) {
+		for (let dialog of frappe.ui.form._dialogs) {
+			if (
+				dialog?.title &&
+				(dialog.title.includes("Mpesa") || dialog.title.includes("Payment"))
+			) {
+				dialog.hide?.();
+			}
+		}
+	}
 }
