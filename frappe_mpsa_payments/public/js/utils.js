@@ -51,7 +51,7 @@ mpesa_qp.show_dialog = function (
 		primary_action_label: __("Add Payments"),
 		primary_action: () => process_mpesa(frm, dialog),
 		secondary_action_label: __("Request Payment"),
-		secondary_action: () => mpesa_show_request_dialog(frm, outstanding, mop_config),
+		secondary_action: () => mpesa_show_request_dialog(frm, outstanding, mop_config, dialog),
 	});
 
 	dialog.page = page;
@@ -420,7 +420,7 @@ function pos_payment_options(dialog) {
 	});
 }
 
-function mpesa_show_request_dialog(frm, outstanding, mop_config) {
+function mpesa_show_request_dialog(frm, outstanding, mop_config, parent_dialog = null) {
 	frappe.db.get_value("Customer", frm.doc.customer, ["mobile_no"], function (value) {
 		const phone = value.mobile_no || "";
 		const req = new frappe.ui.Dialog({
@@ -499,6 +499,12 @@ function mpesa_show_request_dialog(frm, outstanding, mop_config) {
 
 									try {
 										req.hide();
+									} catch (e) {
+										console.error(e);
+									}
+
+									try {
+										parent_dialog?.hide();
 									} catch (e) {
 										console.error(e);
 									}
