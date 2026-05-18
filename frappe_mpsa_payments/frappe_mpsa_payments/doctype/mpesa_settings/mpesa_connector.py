@@ -1,10 +1,10 @@
-import frappe
 import base64
 import datetime
 import urllib.parse
+
 import requests
-from requests.auth import HTTPBasicAuth
 from frappe.utils import get_url
+from requests.auth import HTTPBasicAuth
 
 
 class MpesaConnector:
@@ -24,7 +24,11 @@ class MpesaConnector:
             self.base_url = sandbox_url
         else:
             self.base_url = live_url
-        # self.authenticate()
+        self.authentication_token = None
+
+    def _ensure_authenticated(self):
+        if not self.authentication_token:
+            self.authenticate()
 
     def authenticate(self):
         """
@@ -69,6 +73,8 @@ class MpesaConnector:
                                         ConversationID (str): The unique request ID returned by mpesa for each request made
                                         ResponseDescription (str): Response Description message
         """
+
+        self._ensure_authenticated()
 
         payload = {
             "Initiator": initiator,
@@ -122,6 +128,8 @@ class MpesaConnector:
                                         errorCode(str): This is a predefined code that indicates the reason for request failure.
                                         errorMessage(str): This is a predefined code that indicates the reason for request failure.
         """
+
+        self._ensure_authenticated()
 
         time = (
             str(datetime.datetime.now())
@@ -193,6 +201,8 @@ class MpesaConnector:
                                         ResponseDescription (str): Descriptive message of the response.
         """
 
+        self._ensure_authenticated()
+
         payload = {
             "Initiator": initiator,
             "SecurityCredential": security_credential,
@@ -200,8 +210,8 @@ class MpesaConnector:
             "TransactionID": transaction_id,
             "PartyA": party_a,
             "IdentifierType": identifier_type,
-            "Remarks": remarks,
             "Occasion": occasion,
+            "Remarks": remarks,
             "QueueTimeOutURL": queue_timeout_url,
             "ResultURL": result_url,
         }
