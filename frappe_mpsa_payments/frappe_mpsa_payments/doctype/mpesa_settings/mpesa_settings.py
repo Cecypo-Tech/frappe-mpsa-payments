@@ -7,8 +7,6 @@ from json import dumps, loads
 from typing import Any
 from urllib.parse import urlparse
 
-import urllib
-
 import frappe
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
@@ -110,7 +108,7 @@ class MpesaSettings(Document):
                 actual_amount = convert_amount_to_kes(
                     amount=float(base_amount), currency=currency, settings=setting_name
                 )
-            except Exception as e:
+            except Exception:
                 actual_amount = base_amount
 
         express_request = frappe.get_doc(
@@ -567,7 +565,7 @@ def process_transaction_status(integration_request_name):
             ),
             identifier_type=4,  # Organization Short Code
             remarks=remarks,
-            occasion="",
+            occasion="Ok",
             queue_timeout_url=queue_timeout_url,
             result_url=result_url,
         )
