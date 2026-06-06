@@ -1,5 +1,6 @@
 import ast
 import json
+
 import frappe
 import frappe.defaults
 from frappe import _, qb
@@ -10,8 +11,10 @@ from frappe.utils import (
 )
 
 from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import (
+    sanitize_mobile_number,
     submit_mpesa_payment,
 )
+from frappe_mpsa_payments.utils.doctype_names import MPESA_SETTINGS_DOCTYPE
 
 
 def create_payment_entry(
@@ -90,7 +93,7 @@ def create_payment_entry(
         company_currency,
         date,
         "for_selling" if payment_type == "Receive" else "for_buying",
-    ) 
+    )
     paid_amount, received_amount = set_paid_amount_and_received_amount(
         party_account_currency, bank, amount, payment_type, None, conversion_rate
     )
@@ -571,3 +574,88 @@ def process_mpesa_c2b_customer_credit():
     create_and_reconcile_payment_reconciliation(
         invoice_name, customer, company, payment_entries
     )
+
+
+@frappe.whitelist()
+def initiate_payment_entry_stk(payment_entry):
+    pe = frappe.get_doc("Payment Entry", payment_entry)
+    pe.check_permission("submit")
+
+    if pe.docstatus != 0:
+        frappe.throw(_("STK push can only be initiated on a draft Payment Entry."))
+
+    if pe.payment_type != "Receive" or pe.party_type != "Customer":
+        frappe.throw(_("STK Push is only supported for incoming customer payments."))
+
+    if not pe.get("custom_payment_gateway_account"):
+        frappe.throw(_("Set the Payment Gateway Account before initiating STK Push."))
+
+    if pe.difference_amount:
+        frappe.throw(
+            _(
+                "Difference Amount must be zero before initiating an STK Push, otherwise "
+                "the Payment Entry will not be submittable once the payment is received."
+            )
+        )
+
+    # Get the mpesa settings record from the gateway account, and confirm it is an Mpesa gateway
+    payment_gateway = frappe.db.get_value(
+        "Payment Gateway Account", pe.custom_payment_gateway_account, "payment_gateway"
+    )
+
+    gateway_meta = frappe.db.get_value(
+        "Payment Gateway",
+        payment_gateway,
+        ["gateway_settings", "gateway_controller"],
+        as_dict=True,
+    )
+    if not gateway_meta or not gateway_meta.gateway_controller:
+        frappe.throw(
+            _("Could not resolve Mpesa Settings from that Payment Gateway Account.")
+        )
+
+    if gateway_meta.gateway_settings != MPESA_SETTINGS_DOCTYPE:
+        frappe.throw(
+            _("The selected Payment Gateway Account is not configured for M-Pesa.")
+        )
+
+    settings = gateway_meta.gateway_controller
+
+    phone_number = pe.get("custom_mpesa_phone_number")
+    if not phone_number and pe.party:
+        phone_number = frappe.db.get_value("Customer", pe.party, "mobile_no")
+
+    if not phone_number:
+        frappe.throw(_("No M-Pesa phone number on the Payment Entry or the Customer."))
+
+    phone_number = sanitize_mobile_number(phone_number)
+
+    # indempotency: to prevent resending an stk push if one is already in progress or already paid
+    existing = frappe.db.exists(
+        "Mpesa Express Request",
+        {
+            "reference_doctype": "Payment Entry",
+            "reference_name": pe.name,
+            "status": ["in", ["In Progress", "Completed"]],
+        },
+    )
+
+    if existing:
+        status = frappe.db.get_value("Mpesa Express Request", existing, "status")
+        frappe.throw(
+            _("An STK Push for this Payment Entry is already {0}.").format(status)
+        )
+
+    request = frappe.get_doc(
+        {
+            "doctype": "Mpesa Express Request",
+            "settings": settings,
+            "reference_doctype": "Payment Entry",
+            "reference_name": pe.name,
+            "amount": pe.paid_amount,
+            "phone_number": phone_number,
+        }
+    )
+    request.insert(ignore_permissions=True)
+    request.submit()  # on_submit fires initiate_stk_push -> the prompt goes out
+    return request.name
