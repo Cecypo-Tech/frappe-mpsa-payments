@@ -289,6 +289,26 @@ def handle_successful_transaction(request_doc, settings):
                 log_and_throw_error(
                     "Sales Invoice Payment Update Error", request_doc.name
                 )
+        elif request_doc.reference_doctype == "Payment Entry":
+            payment_entry = frappe.get_doc("Payment Entry", request_doc.reference_name)
+            if payment_entry.docstatus == 0:
+                try:
+                    payment_entry.reference_no = request_doc.transaction_id
+                    payment_entry.custom_mpesa_receipt_number = (
+                        request_doc.transaction_id
+                    )
+                    payment_entry.reference_date = (
+                        frappe.utils.getdate(request_doc.transaction_date)
+                        if request_doc.transaction_date
+                        else frappe.utils.nowdate()
+                    )
+                    payment_entry.save(ignore_permissions=True)
+                    payment_entry.submit()
+                    set_mpesa_request_reconciled(request_doc)
+                except Exception:
+                    log_and_throw_error(
+                        "Payment Entry Submission Error", request_doc.name
+                    )
     if request_doc.reference_doctype == "Event Booking":
         try:
             frappe.flags.ignore_permissions = True
