@@ -93,9 +93,16 @@ def retry_stkpush(name, phone_number):
 @frappe.whitelist()
 def check_payment_status(name):
     doc = frappe.get_doc("Mpesa Express Request", name)
+
+    # For Payment Entries, redirect only after reconciliation. This prevents
+    # a transaction status query from redirecting to a draft Payment Entry.
+    redirect_to = doc.redirect_to
+    if doc.reference_doctype == "Payment Entry" and not doc.is_reconciled:
+        redirect_to = None
+    
     return {
         "status": doc.status,
         "docstatus": doc.docstatus,
         "response_description": doc.response_description,
-        "redirect_to": doc.redirect_to,
+        "redirect_to": redirect_to,
     }
