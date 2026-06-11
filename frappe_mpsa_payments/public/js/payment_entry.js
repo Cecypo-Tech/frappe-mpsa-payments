@@ -17,28 +17,10 @@ frappe.ui.form.on("Payment Entry", {
 					freeze: true,
 					freeze_message: __("Sending STK Push..."),
 					callback: (r) => {
-						if (!r.exc) {
-							frappe.show_alert({
-								message: __(
-									"STK Push sent. Ask the customer to enter their M-Pesa PIN."
-								),
-								indicator: "green",
-							});
-
-							const handler = (data) => {
-								if (
-									data.reference_doctype === "Payment Entry" &&
-									data.reference_name === frm.doc.name
-								) {
-									frappe.realtime.off("mpesa_stk_payment_completed", handler);
-									frappe.show_alert({
-										message: __("Payment received. Submitting..."),
-										indicator: "green",
-									});
-									frm.reload_doc();
-								}
-							};
-							frappe.realtime.on("mpesa_stk_payment_completed", handler);
+						if (!r.exc && r.message && r.message.route) {
+							// Redirect to the STK status page. It handles polling,
+							// retries, and returns once the Payment Entry is submitted.
+							window.location.href = r.message.route;
 						}
 					},
 				});
