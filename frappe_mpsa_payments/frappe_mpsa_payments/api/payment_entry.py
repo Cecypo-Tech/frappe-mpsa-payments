@@ -6,6 +6,7 @@ import frappe.defaults
 from frappe import _, qb
 from frappe.utils import (
     flt,
+    get_url_to_form,
     getdate,
     nowdate,
 )
@@ -630,21 +631,46 @@ def initiate_payment_entry_stk(payment_entry):
 
     phone_number = sanitize_mobile_number(phone_number)
 
-    # indempotency: to prevent resending an stk push if one is already in progress or already paid
-    existing = frappe.db.exists(
+    # Where the stkpush page should send the user once the payment is
+    # reconciled and the Payment Entry has been submitted.
+    redirect_to = get_url_to_form("Payment Entry", pe.name)
+
+    # idempotency so that never create a second prompt for a Payment Entry that is
+    # already paid or has a live/failed request. Instead, route the user back
+    # to the existing request's status page, where they can watch progress or
+    # retry (with an editable phone number) if it failed.
+    existing = frappe.db.get_value(
         "Mpesa Express Request",
         {
             "reference_doctype": "Payment Entry",
             "reference_name": pe.name,
-            "status": ["in", ["In Progress", "Completed"]],
+            "status": ["in", ["In Progress", "Completed", "Failed"]],
         },
+        ["name", "status", "route", "redirect_to"],
+        as_dict=True,
     )
 
     if existing:
-        status = frappe.db.get_value("Mpesa Express Request", existing, "status")
-        frappe.throw(
-            _("An STK Push for this Payment Entry is already {0}.").format(status)
-        )
+        if existing.status == "Completed":
+            frappe.throw(
+                _(
+                    "An M-Pesa payment for this Payment Entry has already been "
+                    "completed (request {0})."
+                ).format(existing.name)
+            )
+
+        # In Progress or Failed: refresh the request with the latest details
+        # from the Payment Entry so a retry from the status page uses them.
+        updates = {}
+        if not existing.redirect_to:
+            updates["redirect_to"] = redirect_to
+        if existing.status == "Failed":
+            updates["phone_number"] = phone_number
+            updates["amount"] = pe.paid_amount
+        if updates:
+            frappe.db.set_value("Mpesa Express Request", existing.name, updates)
+
+        return {"name": existing.name, "route": existing.route}
 
     request = frappe.get_doc(
         {
@@ -654,8 +680,9 @@ def initiate_payment_entry_stk(payment_entry):
             "reference_name": pe.name,
             "amount": pe.paid_amount,
             "phone_number": phone_number,
+            "redirect_to": redirect_to,
         }
     )
     request.insert(ignore_permissions=True)
-    request.submit()  # on_submit fires initiate_stk_push -> the prompt goes out
-    return request.name
+    request.submit()  # on_submit sends the stkpush
+    return {"name": request.name, "route": request.route}
