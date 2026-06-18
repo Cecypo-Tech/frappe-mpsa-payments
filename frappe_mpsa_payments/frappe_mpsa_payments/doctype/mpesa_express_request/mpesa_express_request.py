@@ -159,6 +159,7 @@ class MpesaExpressRequest(Document):
 
     @frappe.whitelist()
     def reconcile_payment(self):
+        self.reload()
         settings = frappe.get_doc(MPESA_SETTINGS_DOCTYPE, self.settings)
 
         if not self.is_reconciled:
