@@ -30,6 +30,7 @@ from ....utils.doctype_names import (
     PUBLIC_CERTIFICATES_DOCTYPE,
 )
 from ....utils.utils import (
+    erpnext_app_import_guard,
     validate_phone_number,
 )
 from ...api.m_pesa_api import get_account_balance
@@ -398,6 +399,9 @@ def fetch_param_value(response: dict, key: str, key_field: str) -> str | None:
 def create_payment_gateway_and_mode_of_payment(
     gateway, payment_channel="Email", payment_type="General", company=None
 ):
+    with erpnext_app_import_guard():
+        pass
+
     base_company = company or frappe.get_cached_value(
         "Global Defaults", "Global Defaults", "default_company"
     )
