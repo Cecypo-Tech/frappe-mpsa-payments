@@ -30,8 +30,6 @@ from ....utils.doctype_names import (
     PUBLIC_CERTIFICATES_DOCTYPE,
 )
 from ....utils.utils import (
-    create_payment_gateway_account,
-    erpnext_app_import_guard,
     validate_phone_number,
 )
 from ...api.m_pesa_api import get_account_balance
@@ -115,7 +113,7 @@ class MpesaSettings(Document):
         #     gateway="Mpesa-" + self.payment_gateway_name,
         #     payment_channel="Phone",
         # )
-        create_payment_gateway_account(
+        create_payment_gateway_and_mode_of_payment(
             gateway="Mpesa-" + self.payment_gateway_name,
             payment_channel="Phone",
             company=self.company,
@@ -123,11 +121,11 @@ class MpesaSettings(Document):
 
         # required to fetch the bank account details from the payment gateway account
         frappe.db.commit()  # nosemgrep
-        create_mode_of_payment(
-            "Mpesa-" + self.payment_gateway_name,
-            payment_type="Phone",
-            company=self.company,
-        )
+        # create_mode_of_payment(
+        #     "Mpesa-" + self.payment_gateway_name,
+        #     payment_type="Phone",
+        #     company=self.company,
+        # )
 
     def validate(self) -> None:
         if self.initiator_password and not self.security_credential:
@@ -397,38 +395,110 @@ def fetch_param_value(response: dict, key: str, key_field: str) -> str | None:
             return param["Value"]
 
 
-def create_mode_of_payment(
-    gateway: str, payment_type: str = "General", company: str = None
-) -> Document:
-    with erpnext_app_import_guard():
-        from erpnext import get_default_company
-
-    payment_gateway_account = frappe.db.get_value(
-        "Payment Gateway Account", {"payment_gateway": gateway}, ["payment_account"]
+def create_payment_gateway_and_mode_of_payment(
+    gateway, payment_channel="Email", payment_type="General", company=None
+):
+    base_company = company or frappe.get_cached_value(
+        "Global Defaults", "Global Defaults", "default_company"
     )
+    if not base_company:
+        return
 
-    mode_of_payment = frappe.db.exists("Mode of Payment", gateway)
-    if not mode_of_payment and payment_gateway_account:
-        mode_of_payment = frappe.get_doc(
-            {
-                "doctype": "Mode of Payment",
-                "mode_of_payment": gateway,
-                "enabled": 1,
-                "type": payment_type,
-                "accounts": [
-                    {
-                        "doctype": "Mode of Payment Account",
-                        "company": company or get_default_company(),
-                        "default_account": payment_gateway_account,
-                    }
-                ],
-            }
+    company_descendants = frappe.db.get_descendants("Company", base_company)
+    companies = [base_company] + (company_descendants or [])
+
+    mode_of_payment_accounts = []
+
+    for comp in companies:
+        bank_account = frappe.db.get_value(
+            "Account",
+            {"account_name": _(gateway), "company": comp},
+            ["name", "account_currency", "is_group"],
+            as_dict=1,
         )
-        mode_of_payment.insert(ignore_permissions=True)
+
+        if not bank_account:
+            bank_account = frappe.db.get_value(
+                "Account",
+                {"account_name": gateway, "company": comp},
+                ["name", "account_currency", "is_group"],
+                as_dict=1,
+            )
+
+        if not bank_account:
+            continue
+
+        target_accounts = []
+        if not bank_account.is_group:
+            target_accounts.append(bank_account)
+
+        account_descendants = frappe.db.get_descendants("Account", bank_account.name)
+        if account_descendants:
+            child_ledgers = frappe.get_all(
+                "Account",
+                filters={"name": ["in", account_descendants], "is_group": 0},
+                fields=["name", "account_currency"],
+            )
+            target_accounts.extend(child_ledgers)
+
+        for acc in target_accounts:
+            if not frappe.db.exists(
+                "Payment Gateway Account",
+                {
+                    "payment_gateway": gateway,
+                    "currency": acc.account_currency,
+                    "payment_account": acc.name,
+                },
+            ):
+                try:
+                    frappe.get_doc(
+                        {
+                            "doctype": "Payment Gateway Account",
+                            "is_default": 1,
+                            "payment_gateway": gateway,
+                            "payment_account": acc.name,
+                            "currency": acc.account_currency,
+                            "payment_channel": payment_channel,
+                            "company": comp,
+                        }
+                    ).insert(ignore_permissions=True, ignore_if_duplicate=True)
+                except frappe.DuplicateEntryError:
+                    pass
+
+            mode_of_payment_accounts.append(
+                {
+                    "doctype": "Mode of Payment Account",
+                    "company": comp,
+                    "default_account": acc.name,
+                }
+            )
+
+    if mode_of_payment_accounts:
+        if frappe.db.exists("Mode of Payment", gateway):
+            mode_of_payment = frappe.get_doc("Mode of Payment", gateway)
+            existing_companies = {row.company for row in mode_of_payment.accounts}
+
+            updated = False
+            for acc_row in mode_of_payment_accounts:
+                if acc_row["company"] not in existing_companies:
+                    mode_of_payment.append("accounts", acc_row)
+                    updated = True
+
+            if updated:
+                mode_of_payment.save(ignore_permissions=True)
+        else:
+            mode_of_payment = frappe.get_doc(
+                {
+                    "doctype": "Mode of Payment",
+                    "mode_of_payment": gateway,
+                    "enabled": 1,
+                    "type": payment_type,
+                    "accounts": mode_of_payment_accounts,
+                }
+            )
+            mode_of_payment.insert(ignore_permissions=True)
 
         return mode_of_payment
-
-    return frappe.get_doc("Mode of Payment", mode_of_payment)
 
 
 @frappe.whitelist()
