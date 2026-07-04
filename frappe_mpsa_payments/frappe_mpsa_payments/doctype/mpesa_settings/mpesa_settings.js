@@ -21,7 +21,38 @@ frappe.ui.form.on("Mpesa Settings", {
 				},
 			};
 		};
+
+		// Register the transaction status listener once per form load,
+		// removing any prior instance first so clicks never stack listeners.
+		if (frm._mpesa_status_handler) {
+			frappe.realtime.off("mpesa_transaction_status_update", frm._mpesa_status_handler);
+		}
+		frm._mpesa_status_handler = (data) => {
+			frappe.hide_progress();
+			if (frm._mpesa_status_timeout) {
+				clearTimeout(frm._mpesa_status_timeout);
+				frm._mpesa_status_timeout = null;
+			}
+			frappe.msgprint({
+				message: __(data.message),
+				title: __(data.title),
+				indicator:
+					data.status === "error"
+						? "red"
+						: data.status === "warning"
+						? "orange"
+						: "green",
+			});
+			if (data.document_name) {
+				frappe.show_alert({
+					message: __("View transaction: {0}", [data.document_name]),
+					indicator: "green",
+				});
+			}
+		};
+		frappe.realtime.on("mpesa_transaction_status_update", frm._mpesa_status_handler);
 	},
+
 	get_account_balance: function (frm) {
 		if (!frm.doc.initiator_name && !frm.doc.security_credential) {
 			frappe.throw(__("Please set the initiator name and the security credential"));
@@ -97,13 +128,32 @@ frappe.ui.form.on("Mpesa Settings", {
 						remarks: values.remarks,
 					},
 					callback: (r) => {
-						if (r.message && r.message.status === "queued") {
-						} else {
-							frappe.msgprint({
-								message: __(r.message.message),
-								title: r.message.status === "error" ? "Error" : "Success",
-								indicator: r.message.status === "error" ? "red" : "green",
-							});
+						if (r.message) {
+							if (r.message.status === "error") {
+								frappe.hide_progress();
+								frappe.msgprint({
+									message: __(r.message.message),
+									title: __("Error"),
+									indicator: "red",
+								});
+							} else {
+								frappe.show_progress(
+									__("Processing"),
+									50,
+									100,
+									__("Waiting for M-Pesa callback...")
+								);
+								// Auto-cancel progress if Safaricom never calls back
+								frm._mpesa_status_timeout = setTimeout(() => {
+									frappe.hide_progress();
+									frappe.show_alert({
+										message: __(
+											"No callback received from M-Pesa. Check Error Logs."
+										),
+										indicator: "orange",
+									});
+								}, 60000);
+							}
 						}
 					},
 					error: (err) => {
