@@ -58,7 +58,12 @@ frappe.ui.form.on("Mpesa Settings", {
 			frappe.msgprint({
 				message: __(data.message),
 				title: __(data.title),
-				indicator: data.status === "error" ? "red" : "green",
+				indicator:
+					data.status === "error"
+						? "red"
+						: data.status === "warning"
+						? "orange"
+						: "green",
 			});
 		};
 		frappe.realtime.on("mpesa_pull_transaction_complete", frm._mpesa_pull_handler);
