@@ -283,14 +283,108 @@ class TestMpesaSettings(unittest.TestCase):
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch(
-            "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.get_token",
-            return_value="test_token",
-        ), patch("requests.post", return_value=mock_response):
+        with (
+            patch(
+                "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.get_token",
+                return_value="test_token",
+            ),
+            patch("requests.post", return_value=mock_response),
+        ):
             result = register_pull_transaction("_Test")
 
         self.assertEqual(result["status"], "success")
         self.assertIn("Accept", result["message"])
+
+    def test_pull_transaction_on_success_creates_c2b_records(self):
+        """pull_transaction_on_success inserts C2B records from a pull response."""
+        from frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_response_handler import (
+            pull_transaction_on_success,
+        )
+
+        unique_txn_id = f"PULL{frappe.generate_hash()[:8].upper()}"
+        response = {
+            "ResponseCode": "0",
+            "ResponseDescription": "Accept the service request successfully.",
+            "Transactions": {
+                "Transaction": [
+                    {
+                        "TransactionID": unique_txn_id,
+                        "TransactionDate": "20230601120000",
+                        "CustomerMSISDN": "254712345678",
+                        "BillReferenceNumber": "TEST-REF-001",
+                        "OrgAccountBalance": "5000.00",
+                        "TransactionAmount": "250.00",
+                        "FullName": "Jane Doe",
+                        "ReasonType": "Pay Bill Online",
+                        "OriginatorConversationID": "test-conv-id-001",
+                    }
+                ]
+            },
+        }
+
+        pull_transaction_on_success(
+            response=response,
+            document_name="_Test",
+            settings_name="_Test",
+            integration_request=None,
+        )
+
+        exists = frappe.db.exists(
+            "Mpesa C2B Payment Register", {"transid": unique_txn_id}
+        )
+        self.assertTrue(exists)
+        frappe.db.delete("Mpesa C2B Payment Register", {"transid": unique_txn_id})
+
+    def test_pull_transaction_on_success_skips_duplicates(self):
+        """pull_transaction_on_success skips a transid that already exists."""
+        from frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_response_handler import (
+            pull_transaction_on_success,
+        )
+
+        unique_txn_id = f"DUP{frappe.generate_hash()[:8].upper()}"
+
+        # Pre-insert so it already exists
+        existing = frappe.get_doc(
+            {
+                "doctype": "Mpesa C2B Payment Register",
+                "transid": unique_txn_id,
+                "transamount": 100.0,
+                "msisdn": "254700000001",
+                "businessshortcode": "174379",
+            }
+        )
+        existing.insert(ignore_permissions=True)
+
+        response = {
+            "ResponseCode": "0",
+            "Transactions": {
+                "Transaction": {
+                    "TransactionID": unique_txn_id,
+                    "TransactionDate": "20230601120000",
+                    "CustomerMSISDN": "254712345678",
+                    "BillReferenceNumber": "",
+                    "OrgAccountBalance": "0.00",
+                    "TransactionAmount": "100.00",
+                    "FullName": "John Duplicate",
+                    "ReasonType": "Pay Bill Online",
+                    "OriginatorConversationID": "dup-conv-id",
+                }
+            },
+        }
+
+        # Should not raise; duplicate is silently skipped
+        pull_transaction_on_success(
+            response=response,
+            document_name="_Test",
+            settings_name="_Test",
+            integration_request=None,
+        )
+
+        count = frappe.db.count(
+            "Mpesa C2B Payment Register", {"transid": unique_txn_id}
+        )
+        self.assertEqual(count, 1)
+        frappe.db.delete("Mpesa C2B Payment Register", {"transid": unique_txn_id})
 
     def test_processing_of_only_one_succes_callback_payload(self):
         from erpnext.accounts.doctype.pos_invoice.test_pos_invoice import (
