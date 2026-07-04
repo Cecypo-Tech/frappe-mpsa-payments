@@ -25,6 +25,7 @@ from ...utils.utils import (
 )
 from .mpesa_response_handler import (
     balance_query_on_success,
+    pull_transaction_on_error,
     pull_transaction_on_success,
     stk_push_on_success,
     transaction_status_on_success,
@@ -1051,13 +1052,17 @@ def pull_transactions(
         frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
         return {"status": "error", "message": "Failed to pull transactions. Check Error Logs."}
 
-    frappe.enqueue(
-        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.execute_pull_transactions",
-        queue="long",
-        timeout=600,
-        mpesa_settings=mpesa_settings,
-        payload=payload,
-    )
+    try:
+        frappe.enqueue(
+            "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.execute_pull_transactions",
+            queue="long",
+            timeout=600,
+            mpesa_settings=mpesa_settings,
+            payload=payload,
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
+        return {"status": "error", "message": "Failed to pull transactions. Check Error Logs."}
 
     return {
         "status": "success",
@@ -1079,6 +1084,7 @@ def execute_pull_transactions(mpesa_settings: str, payload: dict) -> None:
             method="POST",
             payload=payload,
             success_callback=pull_transaction_on_success,
+            error_callback=pull_transaction_on_error,
             request_description="Mpesa Pull Transaction",
             doctype=MPESA_SETTINGS_DOCTYPE,
             document_name=mpesa_settings,

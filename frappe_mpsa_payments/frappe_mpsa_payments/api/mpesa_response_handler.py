@@ -179,3 +179,20 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
         },
         user=owner,
     )
+
+
+def pull_transaction_on_error(response: dict, document_name: str, **kwargs) -> None:
+    frappe.log_error(
+        title="Mpesa Pull Transaction: Safaricom Error",
+        message=frappe.as_json(response),
+    )
+    frappe.publish_realtime(
+        event="mpesa_pull_transaction_complete",
+        message={
+            "status": "error",
+            "title": "Pull Transaction Failed",
+            "message": response.get("errorMessage", "Safaricom rejected the pull request. Check Error Logs."),
+            "count": 0,
+        },
+        user=frappe.session.user,
+    )
