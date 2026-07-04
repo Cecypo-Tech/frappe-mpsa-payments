@@ -5,26 +5,22 @@ import unittest
 from json import dumps
 
 import frappe
-
-from frappe_mpsa_payment.doctype.mpesa_settings.mpesa_settings import (
-    process_balance_info,
-    verify_transaction,
-)
 from frappe_mpsa_payment.doctype.mpesa_settings.mpesa_settings import (
     create_mode_of_payment,
+    process_balance_info,
+    verify_transaction,
 )
 
 
 class TestMpesaSettings(unittest.TestCase):
-
     def setUp(self):
         from erpnext.accounts.doctype.payment_entry.test_payment_entry import (
             create_customer,
         )
-        from erpnext.stock.doctype.item.test_item import make_item
         from erpnext.accounts.doctype.pos_profile.test_pos_profile import (
             make_pos_profile,
         )
+        from erpnext.stock.doctype.item.test_item import make_item
 
         # create payment gateway in setup
         create_mpesa_settings(payment_gateway_name="_Test")
@@ -256,6 +252,44 @@ class TestMpesaSettings(unittest.TestCase):
         pr.cancel()
         pr.delete()
         pos_invoice.delete()
+
+    def test_register_pull_transaction_missing_nominated_number(self):
+        """register_pull_transaction throws when nominated number not set."""
+        from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
+            register_pull_transaction,
+        )
+
+        # _Test settings has no pull_transaction_nominated_number
+        with self.assertRaises(frappe.exceptions.ValidationError):
+            register_pull_transaction("_Test")
+
+    def test_register_pull_transaction_success(self):
+        """register_pull_transaction returns success when Safaricom accepts."""
+        from unittest.mock import MagicMock, patch
+
+        from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
+            register_pull_transaction,
+        )
+
+        frappe.db.set_value(
+            "Mpesa Settings",
+            "_Test",
+            "pull_transaction_nominated_number",
+            "254712345678",
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "ResponseCode": "0",
+            "ResponseDescription": "Accept the service request successfully.",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("requests.post", return_value=mock_response):
+            result = register_pull_transaction("_Test")
+
+        self.assertEqual(result["status"], "success")
+        self.assertIn("Accept", result["message"])
 
     def test_processing_of_only_one_succes_callback_payload(self):
         from erpnext.accounts.doctype.pos_invoice.test_pos_invoice import (
