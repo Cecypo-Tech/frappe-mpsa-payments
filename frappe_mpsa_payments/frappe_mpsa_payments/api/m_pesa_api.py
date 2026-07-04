@@ -1021,3 +1021,52 @@ def verify_transaction(**kwargs) -> None:
             ),
         },
     )
+
+
+@frappe.whitelist()
+def pull_transactions(
+    mpesa_settings: str,
+    start_date: str,
+    end_date: str,
+    offset: int = 0,
+) -> dict:
+    from datetime import datetime as _dt
+
+    from frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_response_handler import (
+        pull_transaction_on_success,
+    )
+    from frappe_mpsa_payments.frappe_mpsa_payments.api.process_request import (
+        process_request,
+    )
+    from frappe_mpsa_payments.utils.doctype_names import MPESA_SETTINGS_DOCTYPE
+
+    def _fmt(dt_str: str) -> str:
+        return _dt.strptime(dt_str.strip(), "%Y-%m-%d %H:%M:%S").strftime("%Y%m%d%H%M%S")
+
+    try:
+        settings = frappe.get_doc(MPESA_SETTINGS_DOCTYPE, mpesa_settings)
+        shortcode = settings.till_number if settings.sandbox else settings.business_shortcode
+
+        payload = {
+            "ShortCode": shortcode,
+            "StartDate": _fmt(start_date),
+            "EndDate": _fmt(end_date),
+            "OffSet": str(int(offset)),
+        }
+
+        process_request(
+            endpoint="/pulltransactions/v1/query",
+            settings_name=mpesa_settings,
+            method="POST",
+            payload=payload,
+            success_callback=pull_transaction_on_success,
+            request_description="Mpesa Pull Transaction",
+            doctype=MPESA_SETTINGS_DOCTYPE,
+            document_name=mpesa_settings,
+        )
+
+        return {"status": "success", "message": "Pull request submitted. Importing transactions..."}
+
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
+        return {"status": "error", "message": "Failed to pull transactions. Check Error Logs."}
