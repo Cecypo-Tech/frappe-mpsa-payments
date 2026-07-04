@@ -25,6 +25,7 @@ from ...utils.utils import (
 )
 from .mpesa_response_handler import (
     balance_query_on_success,
+    pull_transaction_on_success,
     stk_push_on_success,
     transaction_status_on_success,
 )
@@ -1030,18 +1031,10 @@ def pull_transactions(
     end_date: str,
     offset: int = 0,
 ) -> dict:
-    from datetime import datetime as _dt
-
-    from frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_response_handler import (
-        pull_transaction_on_success,
-    )
-    from frappe_mpsa_payments.frappe_mpsa_payments.api.process_request import (
-        process_request,
-    )
-    from frappe_mpsa_payments.utils.doctype_names import MPESA_SETTINGS_DOCTYPE
-
     def _fmt(dt_str: str) -> str:
-        return _dt.strptime(dt_str.strip(), "%Y-%m-%d %H:%M:%S").strftime("%Y%m%d%H%M%S")
+        return datetime.datetime.strptime(dt_str.strip(), "%Y-%m-%d %H:%M:%S").strftime(
+            "%Y%m%d%H%M%S"
+        )
 
     try:
         settings = frappe.get_doc(MPESA_SETTINGS_DOCTYPE, mpesa_settings)
@@ -1054,7 +1047,7 @@ def pull_transactions(
             "OffSet": str(int(offset)),
         }
 
-        process_request(
+        result = process_request(
             endpoint="/pulltransactions/v1/query",
             settings_name=mpesa_settings,
             method="POST",
@@ -1065,7 +1058,17 @@ def pull_transactions(
             document_name=mpesa_settings,
         )
 
-        return {"status": "success", "message": "Pull request submitted. Importing transactions..."}
+        count = 0
+        if isinstance(result, dict):
+            raw = (result.get("Transactions") or {}).get("Transaction", [])
+            transactions = raw if isinstance(raw, list) else [raw] if raw else []
+            count = len(transactions)
+
+        return {
+            "status": "success",
+            "message": "Pull request submitted. Importing transactions...",
+            "count": count,
+        }
 
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")

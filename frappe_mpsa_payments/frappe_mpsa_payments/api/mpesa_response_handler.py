@@ -1,7 +1,11 @@
 import frappe
 from frappe.utils import now_datetime
 
-from ...utils.doctype_names import MPESA_EXPRESS_REQUEST_DOCTYPE, MPESA_SETTINGS_DOCTYPE
+from ...utils.doctype_names import (
+    MPESA_C2B_PAYMENT_REGISTER_DOCTYPE,
+    MPESA_EXPRESS_REQUEST_DOCTYPE,
+    MPESA_SETTINGS_DOCTYPE,
+)
 from ...utils.utils import (
     handle_successful_transaction,
     log_and_throw_error,
@@ -102,56 +106,65 @@ def stk_push_on_success(
 
 
 def pull_transaction_on_success(response: dict, document_name: str, **kwargs) -> None:
-    from frappe_mpsa_payments.utils.doctype_names import (
-        MPESA_C2B_PAYMENT_REGISTER_DOCTYPE,
-        MPESA_SETTINGS_DOCTYPE,
-    )
-
     settings = frappe.get_doc(MPESA_SETTINGS_DOCTYPE, kwargs.get("settings_name", document_name))
     shortcode = settings.till_number if settings.sandbox else settings.business_shortcode
 
     raw = response.get("Transactions", {}).get("Transaction", [])
     transactions = raw if isinstance(raw, list) else [raw]
 
-    created, skipped = 0, 0
+    created, skipped, failed = 0, 0, 0
 
     for txn in transactions:
-        transid = txn.get("TransactionID", "")
-        if not transid:
-            continue
+        try:
+            transid = txn.get("TransactionID", "")
+            if not transid:
+                frappe.log_error(
+                    title="Mpesa Pull Transaction: Missing TransactionID",
+                    message=f"Transaction payload missing TransactionID: {txn}",
+                )
+                skipped += 1
+                continue
 
-        if frappe.db.exists(MPESA_C2B_PAYMENT_REGISTER_DOCTYPE, {"transid": transid}):
+            if frappe.db.exists(MPESA_C2B_PAYMENT_REGISTER_DOCTYPE, {"transid": transid}):
+                frappe.log_error(
+                    title="Mpesa Pull Transaction: Duplicate Skipped",
+                    message=f"transid={transid} already exists in {MPESA_C2B_PAYMENT_REGISTER_DOCTYPE}",
+                )
+                skipped += 1
+                continue
+
+            full_name = txn.get("FullName", "")
+            name_parts = full_name.split(" ", 2)
+
+            doc = frappe.new_doc(MPESA_C2B_PAYMENT_REGISTER_DOCTYPE)
+            doc.transid = transid
+            doc.transtime = txn.get("TransactionDate", "")
+            doc.transamount = float(txn.get("TransactionAmount") or 0.0)
+            doc.msisdn = txn.get("CustomerMSISDN", "")
+            doc.businessshortcode = shortcode
+            doc.billrefnumber = txn.get("BillReferenceNumber", "")
+            doc.orgaccountbalance = txn.get("OrgAccountBalance", "")
+            doc.thirdpartytransid = txn.get("OriginatorConversationID", "")
+            doc.transactiontype = txn.get("ReasonType", "")
+            doc.full_name = full_name
+            doc.firstname = name_parts[0] if len(name_parts) > 0 else ""
+            doc.middlename = name_parts[1] if len(name_parts) > 1 else ""
+            doc.lastname = name_parts[2] if len(name_parts) > 2 else ""
+            doc.insert(ignore_permissions=True)
+
             frappe.log_error(
-                title="Mpesa Pull Transaction: Duplicate Skipped",
-                message=f"transid={transid} already exists in {MPESA_C2B_PAYMENT_REGISTER_DOCTYPE}",
+                title="Mpesa Pull Transaction: Record Created",
+                message=f"transid={transid}, doc={doc.name}, amount={doc.transamount}, msisdn={doc.msisdn}",
             )
-            skipped += 1
+            created += 1
+
+        except Exception:
+            failed += 1
+            frappe.log_error(
+                frappe.get_traceback(),
+                f"Mpesa Pull Transaction: Failed for transid={txn.get('TransactionID', '')}",
+            )
             continue
-
-        full_name = txn.get("FullName", "")
-        name_parts = full_name.split(" ", 2)
-
-        doc = frappe.new_doc(MPESA_C2B_PAYMENT_REGISTER_DOCTYPE)
-        doc.transid = transid
-        doc.transtime = txn.get("TransactionDate", "")
-        doc.transamount = float(txn.get("TransactionAmount") or 0.0)
-        doc.msisdn = txn.get("CustomerMSISDN", "")
-        doc.businessshortcode = shortcode
-        doc.billrefnumber = txn.get("BillReferenceNumber", "")
-        doc.orgaccountbalance = txn.get("OrgAccountBalance", "")
-        doc.thirdpartytransid = txn.get("OriginatorConversationID", "")
-        doc.transactiontype = txn.get("ReasonType", "")
-        doc.full_name = full_name
-        doc.firstname = name_parts[0] if len(name_parts) > 0 else ""
-        doc.middlename = name_parts[1] if len(name_parts) > 1 else ""
-        doc.lastname = name_parts[2] if len(name_parts) > 2 else ""
-        doc.insert(ignore_permissions=True)
-
-        frappe.log_error(
-            title="Mpesa Pull Transaction: Record Created",
-            message=f"transid={transid}, doc={doc.name}, amount={doc.transamount}, msisdn={doc.msisdn}",
-        )
-        created += 1
 
     frappe.db.commit()
 
@@ -161,7 +174,7 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
         message={
             "status": "success" if created > 0 or skipped == len(transactions) else "warning",
             "title": "Pull Transaction Complete",
-            "message": f"{created} record(s) imported, {skipped} duplicate(s) skipped.",
+            "message": f"{created} record(s) imported, {skipped} skipped, {failed} failed.",
             "count": created,
         },
         user=owner,
