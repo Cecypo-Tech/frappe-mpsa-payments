@@ -3,6 +3,7 @@
 
 
 import base64
+import re
 from json import dumps, loads
 from typing import Any
 from urllib.parse import urlparse
@@ -652,35 +653,43 @@ def register_pull_transaction(mpesa_settings: str) -> dict:
     if not settings.pull_transaction_nominated_number:
         frappe.throw(_("Pull Transaction Nominated Number is required."))
 
+    if not re.match(r"^2547\d{8}$", settings.pull_transaction_nominated_number):
+        frappe.throw(
+            _(
+                "Pull Transaction Nominated Number must be in the format 2547XXXXXXXX (12 digits, starting with 2547)."
+            )
+        )
+
     base_url = (
         "https://sandbox.safaricom.co.ke"
         if settings.sandbox
         else "https://api.safaricom.co.ke"
     )
-    token = get_token(
-        app_key=settings.consumer_key,
-        app_secret=settings.get_password("consumer_secret"),
-        base_url=base_url,
-    )
-    shortcode = (
-        settings.till_number if settings.sandbox else settings.business_shortcode
-    )
-    callback_url = build_callback_url(
-        "frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings.pull_transaction_callback"
-    )
-
-    payload = {
-        "ShortCode": shortcode,
-        "RequestType": "Pull",
-        "NominatedNumber": settings.pull_transaction_nominated_number,
-        "CallBackURL": callback_url,
-    }
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
 
     try:
+        token = get_token(
+            app_key=settings.consumer_key,
+            app_secret=settings.get_password("consumer_secret"),
+            base_url=base_url,
+        )
+        shortcode = (
+            settings.till_number if settings.sandbox else settings.business_shortcode
+        )
+        callback_url = build_callback_url(
+            "frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings.pull_transaction_callback"
+        )
+
+        payload = {
+            "ShortCode": shortcode,
+            "RequestType": "Pull",
+            "NominatedNumber": settings.pull_transaction_nominated_number,
+            "CallBackURL": callback_url,
+        }
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
         resp = _requests.post(
             f"{base_url}/pulltransactions/v1/register",
             headers=headers,

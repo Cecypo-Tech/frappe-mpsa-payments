@@ -254,7 +254,6 @@ class TestMpesaSettings(unittest.TestCase):
         pos_invoice.delete()
 
     def test_register_pull_transaction_missing_nominated_number(self):
-        """register_pull_transaction throws when nominated number not set."""
         from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
             register_pull_transaction,
         )
@@ -264,7 +263,6 @@ class TestMpesaSettings(unittest.TestCase):
             register_pull_transaction("_Test")
 
     def test_register_pull_transaction_success(self):
-        """register_pull_transaction returns success when Safaricom accepts."""
         from unittest.mock import MagicMock, patch
 
         from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
@@ -285,7 +283,10 @@ class TestMpesaSettings(unittest.TestCase):
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch("requests.post", return_value=mock_response):
+        with patch(
+            "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.get_token",
+            return_value="test_token",
+        ), patch("requests.post", return_value=mock_response):
             result = register_pull_transaction("_Test")
 
         self.assertEqual(result["status"], "success")
