@@ -276,6 +276,40 @@ class TestMpesaSettings(unittest.TestCase):
         pr.delete()
         pos_invoice.delete()
 
+    def test_register_pull_transaction_missing_nominated_number(self):
+        """register_pull_transaction throws when nominated number not set."""
+        from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
+            register_pull_transaction,
+        )
+        # _Test settings has no pull_transaction_nominated_number
+        with self.assertRaises(frappe.exceptions.ValidationError):
+            register_pull_transaction("_Test")
+
+    def test_register_pull_transaction_success(self):
+        """register_pull_transaction returns success when Safaricom accepts."""
+        from unittest.mock import MagicMock, patch
+
+        from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
+            register_pull_transaction,
+        )
+
+        frappe.db.set_value(
+            "Mpesa Settings", "_Test", "pull_transaction_nominated_number", "254712345678"
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "ResponseCode": "0",
+            "ResponseDescription": "Accept the service request successfully.",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("requests.post", return_value=mock_response):
+            result = register_pull_transaction("_Test")
+
+        self.assertEqual(result["status"], "success")
+        self.assertIn("Accept", result["message"])
+
     def test_processing_of_only_one_succes_callback_payload(self):
         mpesa_account = frappe.db.get_value(
             "Payment Gateway Account",
