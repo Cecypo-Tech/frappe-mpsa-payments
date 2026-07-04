@@ -1,33 +1,39 @@
 frappe.listview_settings["Mpesa C2B Payment Register"] = {
 	onload: function (listview) {
-		// Register realtime listener
-		if (!listview._mpesa_realtime_registered) {
-			listview._mpesa_realtime_registered = true;
-
-			frappe.realtime.on("mpesa_transaction_status_update", (data) => {
-				frappe.hide_progress();
-
-				frappe.msgprint({
-					message: __(data.message),
-					title: __(data.title),
-					indicator:
-						data.status === "error"
-							? "red"
-							: data.status === "warning"
-							? "orange"
-							: "green",
-				});
-
-				if (data.document_name) {
-					frappe.show_alert({
-						message: __("View transaction: {0}", [data.document_name]),
-						indicator: "green",
-					});
-				}
-
-				listview.refresh();
-			});
+		// Always remove the previous listener before re-registering.
+		// The guard-on-instance approach fails on navigation because each
+		// page load creates a new listview object while old socket listeners
+		// from the previous instance persist on the global event bus.
+		if (window._mpesa_c2b_status_handler) {
+			frappe.realtime.off("mpesa_transaction_status_update", window._mpesa_c2b_status_handler);
 		}
+		window._mpesa_c2b_status_handler = (data) => {
+			frappe.hide_progress();
+			if (window._mpesa_c2b_status_timeout) {
+				clearTimeout(window._mpesa_c2b_status_timeout);
+				window._mpesa_c2b_status_timeout = null;
+			}
+			frappe.msgprint({
+				message: __(data.message),
+				title: __(data.title),
+				indicator:
+					data.status === "error"
+						? "red"
+						: data.status === "warning"
+						? "orange"
+						: "green",
+			});
+
+			if (data.document_name) {
+				frappe.show_alert({
+					message: __("View transaction: {0}", [data.document_name]),
+					indicator: "green",
+				});
+			}
+
+			listview.refresh();
+		};
+		frappe.realtime.on("mpesa_transaction_status_update", window._mpesa_c2b_status_handler);
 		// Add a custom button to the page actions (top bar)
 		listview.page.add_inner_button(__("Check Transaction Status"), function () {
 			frappe.prompt(
@@ -96,6 +102,13 @@ frappe.listview_settings["Mpesa C2B Payment Register"] = {
 												100,
 												__("Waiting for M-Pesa callback...")
 											);
+											window._mpesa_c2b_status_timeout = setTimeout(() => {
+												frappe.hide_progress();
+												frappe.show_alert({
+													message: __("No callback received from M-Pesa. Check Error Logs."),
+													indicator: "orange",
+												});
+											}, 60000);
 										}
 									}
 								},
