@@ -1047,7 +1047,33 @@ def pull_transactions(
             "OffSet": str(int(offset)),
         }
 
-        result = process_request(
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
+        return {"status": "error", "message": "Failed to pull transactions. Check Error Logs."}
+
+    frappe.enqueue(
+        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.execute_pull_transactions",
+        queue="long",
+        timeout=600,
+        mpesa_settings=mpesa_settings,
+        payload=payload,
+    )
+
+    return {
+        "status": "success",
+        "message": "Pull request queued. Importing transactions in the background...",
+    }
+
+
+def execute_pull_transactions(mpesa_settings: str, payload: dict) -> None:
+    """Call Safaricom's pull transactions endpoint and process the results.
+
+    Runs in the background (enqueued by `pull_transactions`) since the
+    Safaricom call plus C2B record creation/reconciliation can take a while
+    and shouldn't hold up the whitelisted request/response cycle.
+    """
+    try:
+        process_request(
             endpoint="/pulltransactions/v1/query",
             settings_name=mpesa_settings,
             method="POST",
@@ -1057,19 +1083,15 @@ def pull_transactions(
             doctype=MPESA_SETTINGS_DOCTYPE,
             document_name=mpesa_settings,
         )
-
-        count = 0
-        if isinstance(result, dict):
-            raw = (result.get("Transactions") or {}).get("Transaction", [])
-            transactions = raw if isinstance(raw, list) else [raw] if raw else []
-            count = len(transactions)
-
-        return {
-            "status": "success",
-            "message": "Pull request submitted. Importing transactions...",
-            "count": count,
-        }
-
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
-        return {"status": "error", "message": "Failed to pull transactions. Check Error Logs."}
+        frappe.publish_realtime(
+            event="mpesa_pull_transaction_complete",
+            message={
+                "status": "error",
+                "title": "Pull Transaction Failed",
+                "message": "Failed to pull transactions. Check Error Logs.",
+                "count": 0,
+            },
+            user=frappe.session.user,
+        )
