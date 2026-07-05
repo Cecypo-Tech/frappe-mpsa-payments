@@ -1045,7 +1045,7 @@ def pull_transactions(
             "ShortCode": shortcode,
             "StartDate": _fmt(start_date),
             "EndDate": _fmt(end_date),
-            "OffSet": int(offset),
+            "OffSetValue": str(int(offset)),
         }
 
     except Exception:
