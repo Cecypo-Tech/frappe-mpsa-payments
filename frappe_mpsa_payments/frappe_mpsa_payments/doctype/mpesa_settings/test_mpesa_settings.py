@@ -296,30 +296,32 @@ class TestMpesaSettings(unittest.TestCase):
         self.assertIn("Accept", result["message"])
 
     def test_pull_transaction_on_success_creates_c2b_records(self):
-        """pull_transaction_on_success inserts C2B records from a pull response."""
         from frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_response_handler import (
             pull_transaction_on_success,
         )
 
         unique_txn_id = f"PULL{frappe.generate_hash()[:8].upper()}"
         response = {
-            "ResponseCode": "0",
-            "ResponseDescription": "Accept the service request successfully.",
-            "Transactions": {
-                "Transaction": [
+            "ResponseCode": "1000",
+            "ResponseMessage": "Success",
+            "Response": [
+                [
                     {
-                        "TransactionID": unique_txn_id,
-                        "TransactionDate": "20230601120000",
-                        "CustomerMSISDN": "254712345678",
-                        "BillReferenceNumber": "TEST-REF-001",
-                        "OrgAccountBalance": "5000.00",
-                        "TransactionAmount": "250.00",
-                        "FullName": "Jane Doe",
-                        "ReasonType": "Pay Bill Online",
-                        "OriginatorConversationID": "test-conv-id-001",
+                        "transactionId": unique_txn_id,
+                        "trxDate": "2026-06-01T12:00:00+03:00",
+                        "msisdn": "254712345678",
+                        "sender": "MPESA",
+                        "transactiontype": "c2b-paybill-debi",
+                        "billreference": "TEST-REF-001",
+                        "amount": "250.00",
+                        "organizationname": "Safaricom Daraja 978",
                     }
                 ]
-            },
+            ],
+            "CurrentPage": 0,
+            "PageSize": 10,
+            "TotalPages": 1,
+            "TotalRecords": 1,
         }
 
         pull_transaction_on_success(
@@ -336,7 +338,6 @@ class TestMpesaSettings(unittest.TestCase):
         frappe.db.delete("Mpesa C2B Payment Register", {"transid": unique_txn_id})
 
     def test_pull_transaction_on_success_skips_duplicates(self):
-        """pull_transaction_on_success skips a transid that already exists."""
         from frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_response_handler import (
             pull_transaction_on_success,
         )
@@ -356,20 +357,21 @@ class TestMpesaSettings(unittest.TestCase):
         existing.insert(ignore_permissions=True)
 
         response = {
-            "ResponseCode": "0",
-            "Transactions": {
-                "Transaction": {
-                    "TransactionID": unique_txn_id,
-                    "TransactionDate": "20230601120000",
-                    "CustomerMSISDN": "254712345678",
-                    "BillReferenceNumber": "",
-                    "OrgAccountBalance": "0.00",
-                    "TransactionAmount": "100.00",
-                    "FullName": "John Duplicate",
-                    "ReasonType": "Pay Bill Online",
-                    "OriginatorConversationID": "dup-conv-id",
-                }
-            },
+            "ResponseCode": "1000",
+            "Response": [
+                [
+                    {
+                        "transactionId": unique_txn_id,
+                        "trxDate": "2026-06-01T12:00:00+03:00",
+                        "msisdn": "254712345678",
+                        "sender": "MPESA",
+                        "transactiontype": "c2b-paybill-debi",
+                        "billreference": "",
+                        "amount": "100.00",
+                        "organizationname": "Safaricom Daraja 978",
+                    }
+                ]
+            ],
         }
 
         # Should not raise; duplicate is silently skipped

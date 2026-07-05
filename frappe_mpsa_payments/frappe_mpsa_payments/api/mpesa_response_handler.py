@@ -122,6 +122,20 @@ def stk_push_on_error(
         raise
 
 
+def _flatten_pull_transactions(raw) -> list:
+    if isinstance(raw, dict):
+        return [raw]
+    if not isinstance(raw, list):
+        return []
+    flat = []
+    for item in raw:
+        if isinstance(item, list):
+            flat.extend(_flatten_pull_transactions(item))
+        elif isinstance(item, dict):
+            flat.append(item)
+    return flat
+
+
 def pull_transaction_on_success(response: dict, document_name: str, **kwargs) -> None:
     settings = frappe.get_doc(
         MPESA_SETTINGS_DOCTYPE, kwargs.get("settings_name", document_name)
@@ -130,18 +144,20 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
         settings.till_number if settings.sandbox else settings.business_shortcode
     )
 
-    raw = response.get("Transactions", {}).get("Transaction", [])
-    transactions = raw if isinstance(raw, list) else [raw]
+    # Safaricom's actual response nests one list of transaction dicts inside
+    # "Response" (confirmed via live sandbox test) - not the "Transactions.Transaction"
+    # shape assumed at plan time.
+    transactions = _flatten_pull_transactions(response.get("Response", []))
 
     created, skipped, failed = 0, 0, 0
 
     for txn in transactions:
         try:
-            transid = txn.get("TransactionID", "")
+            transid = txn.get("transactionId", "")
             if not transid:
                 frappe.log_error(
                     title="Mpesa Pull Transaction: Missing TransactionID",
-                    message=f"Transaction payload missing TransactionID: {txn}",
+                    message=f"Transaction payload missing transactionId: {txn}",
                 )
                 skipped += 1
                 continue
@@ -156,23 +172,14 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
                 skipped += 1
                 continue
 
-            full_name = txn.get("FullName", "")
-            name_parts = full_name.split(" ", 2)
-
             doc = frappe.new_doc(MPESA_C2B_PAYMENT_REGISTER_DOCTYPE)
             doc.transid = transid
-            doc.transtime = txn.get("TransactionDate", "")
-            doc.transamount = float(txn.get("TransactionAmount") or 0.0)
-            doc.msisdn = txn.get("CustomerMSISDN", "")
+            doc.transtime = txn.get("trxDate", "")
+            doc.transamount = float(txn.get("amount") or 0.0)
+            doc.msisdn = txn.get("msisdn", "")
             doc.businessshortcode = shortcode
-            doc.billrefnumber = txn.get("BillReferenceNumber", "")
-            doc.orgaccountbalance = txn.get("OrgAccountBalance", "")
-            doc.thirdpartytransid = txn.get("OriginatorConversationID", "")
-            doc.transactiontype = txn.get("ReasonType", "")
-            doc.full_name = full_name
-            doc.firstname = name_parts[0] if len(name_parts) > 0 else ""
-            doc.middlename = name_parts[1] if len(name_parts) > 1 else ""
-            doc.lastname = name_parts[2] if len(name_parts) > 2 else ""
+            doc.billrefnumber = txn.get("billreference", "")
+            doc.transactiontype = txn.get("transactiontype", "")
             doc.insert(ignore_permissions=True)
 
             frappe.log_error(
@@ -185,7 +192,7 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
             failed += 1
             frappe.log_error(
                 frappe.get_traceback(),
-                f"Mpesa Pull Transaction: Failed for transid={txn.get('TransactionID', '')}",
+                f"Mpesa Pull Transaction: Failed for transid={txn.get('transactionId', '')}",
             )
             continue
 
@@ -216,7 +223,9 @@ def pull_transaction_on_error(response: dict, document_name: str, **kwargs) -> N
         message={
             "status": "error",
             "title": "Pull Transaction Failed",
-            "message": response.get("errorMessage", "Safaricom rejected the pull request. Check Error Logs."),
+            "message": response.get(
+                "errorMessage", "Safaricom rejected the pull request. Check Error Logs."
+            ),
             "count": 0,
         },
         user=frappe.session.user,
