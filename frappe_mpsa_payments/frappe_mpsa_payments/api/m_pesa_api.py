@@ -984,7 +984,7 @@ def pull_transactions(
 
     def _fmt(dt_str: str) -> str:
         return _dt.strptime(dt_str.strip(), "%Y-%m-%d %H:%M:%S").strftime(
-            "%Y%m%d%H%M%S"
+            "%Y-%m-%d %H:%M:%S"
         )
 
     try:
@@ -1017,7 +1017,10 @@ def pull_transactions(
         )
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
-        return {"status": "error", "message": "Failed to pull transactions. Check Error Logs."}
+        return {
+            "status": "error",
+            "message": "Failed to pull transactions. Check Error Logs.",
+        }
 
     return {
         "status": "success",
