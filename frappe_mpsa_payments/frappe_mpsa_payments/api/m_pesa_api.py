@@ -1034,7 +1034,7 @@ def pull_transactions(
 ) -> dict:
     def _fmt(dt_str: str) -> str:
         return datetime.datetime.strptime(dt_str.strip(), "%Y-%m-%d %H:%M:%S").strftime(
-            "%Y%m%d%H%M%S"
+            "%Y-%m-%d %H:%M:%S"
         )
 
     try:
