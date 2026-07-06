@@ -297,7 +297,7 @@
    "label": "Submit B2C Accounting Entries"
   },
   {
-   "description": "Phone number nominated for Pull Transaction API (format: 2547XXXXXXXX)",
+   "description": "Phone number nominated for Pull Transaction API (format: 254XXXXXXXXX — 254 followed by 9 digits)",
    "fieldname": "pull_transaction_nominated_number",
    "fieldtype": "Data",
    "label": "Pull Transaction Nominated Number"
@@ -310,7 +310,7 @@
   }
  ],
  "links": [],
- "modified": "2026-07-06 08:00:00.000000",
+ "modified": "2026-07-06 09:26:00.000000",
  "modified_by": "Administrator",
  "module": "Frappe Mpsa Payments",
  "name": "Mpesa Settings",
