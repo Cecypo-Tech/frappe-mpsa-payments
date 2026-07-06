@@ -232,7 +232,7 @@ frappe.ui.form.on("Mpesa Settings", {
 		const PULL_WINDOW_HOURS = 48;
 
 		const render_date_range_display = () => {
-			const end_value = d.get_value("end_date") || moment().format(DATE_FORMAT);
+			const end_value = d.get_value("end_date") || frappe.datetime.now_datetime();
 			const end_moment = moment(end_value, DATE_FORMAT);
 			const start_moment = end_moment.clone().subtract(PULL_WINDOW_HOURS, "hours");
 			d.fields_dict.date_range_display.$wrapper.html(
@@ -251,7 +251,7 @@ frappe.ui.form.on("Mpesa Settings", {
 					fieldname: "end_date",
 					fieldtype: "Datetime",
 					reqd: 1,
-					default: moment().format(DATE_FORMAT),
+					default: frappe.datetime.now_datetime(),
 					onchange: () => render_date_range_display(),
 				},
 				{
