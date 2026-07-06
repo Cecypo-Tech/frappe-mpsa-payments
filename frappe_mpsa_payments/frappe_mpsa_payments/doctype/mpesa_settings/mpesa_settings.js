@@ -258,19 +258,35 @@ frappe.ui.form.on("Mpesa Settings", {
 			return;
 		}
 
-		frappe.prompt(
-			[
-				{
-					label: __("Start Date"),
-					fieldname: "start_date",
-					fieldtype: "Datetime",
-					reqd: 1,
-				},
+		const DATE_FORMAT = "YYYY-MM-DD HH:mm:ss";
+		const PULL_WINDOW_HOURS = 48;
+
+		const render_date_range_display = () => {
+			const end_value = d.get_value("end_date") || moment().format(DATE_FORMAT);
+			const end_moment = moment(end_value, DATE_FORMAT);
+			const start_moment = end_moment.clone().subtract(PULL_WINDOW_HOURS, "hours");
+			d.fields_dict.date_range_display.$wrapper.html(
+				`<p>${__("Pulling transactions from {0} to {1}", [
+					`<b>${start_moment.format(DATE_FORMAT)}</b>`,
+					`<b>${end_moment.format(DATE_FORMAT)}</b>`,
+				])}</p>`
+			);
+		};
+
+		const d = new frappe.ui.Dialog({
+			title: __("Pull Transactions"),
+			fields: [
 				{
 					label: __("End Date"),
 					fieldname: "end_date",
 					fieldtype: "Datetime",
 					reqd: 1,
+					default: moment().format(DATE_FORMAT),
+					onchange: () => render_date_range_display(),
+				},
+				{
+					fieldname: "date_range_display",
+					fieldtype: "HTML",
 				},
 				{
 					label: __("Offset"),
@@ -280,12 +296,19 @@ frappe.ui.form.on("Mpesa Settings", {
 					description: __("Page offset for pagination (0 = first page)"),
 				},
 			],
-			(values) => {
+			primary_action_label: __("Pull"),
+			primary_action: (values) => {
+				const end_moment = moment(values.end_date, DATE_FORMAT);
+				const start_date = end_moment
+					.clone()
+					.subtract(PULL_WINDOW_HOURS, "hours")
+					.format(DATE_FORMAT);
+
 				frappe.call({
 					method: "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.pull_transactions",
 					args: {
 						mpesa_settings: frm.doc.name,
-						start_date: values.start_date,
+						start_date: start_date,
 						end_date: values.end_date,
 						offset: values.offset || 0,
 					},
@@ -328,10 +351,13 @@ frappe.ui.form.on("Mpesa Settings", {
 						});
 					},
 				});
+
+				d.hide();
 			},
-			__("Pull Transactions"),
-			__("Pull")
-		);
+		});
+
+		d.show();
+		render_date_range_display();
 	},
 
 	update_match_field_options: function (frm, cdt, cdn) {
