@@ -171,7 +171,10 @@ scheduler_events = {
         "*/15 * * * *": [
             "frappe_mpsa_payments.services.b2c_scheduler_service.update_b2c_disbursement_statuses"
         ]
-    }
+    },
+    "daily": [
+        "frappe_mpsa_payments.services.pull_transaction_scheduler_service.run_daily_pull_transactions"
+    ],
 }
 
 # Testing
