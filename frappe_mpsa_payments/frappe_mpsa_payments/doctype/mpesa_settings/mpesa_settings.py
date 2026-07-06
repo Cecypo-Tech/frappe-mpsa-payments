@@ -653,10 +653,10 @@ def register_pull_transaction(mpesa_settings: str) -> dict:
     if not settings.pull_transaction_nominated_number:
         frappe.throw(_("Pull Transaction Nominated Number is required."))
 
-    if not re.match(r"^2547\d{8}$", settings.pull_transaction_nominated_number):
+    if not re.match(r"^254\d{9}$", settings.pull_transaction_nominated_number):
         frappe.throw(
             _(
-                "Pull Transaction Nominated Number must be in the format 2547XXXXXXXX (12 digits, starting with 2547)."
+                "Pull Transaction Nominated Number must be in the format 254XXXXXXXXX (254 followed by 9 digits)."
             )
         )
 
@@ -704,10 +704,10 @@ def register_pull_transaction(mpesa_settings: str) -> dict:
         )
         return {"status": "error", "message": str(e)}
 
-    if data.get("ResponseCode") == "0":
+    if data.get("Response Status") == "1000":
         return {
             "status": "success",
-            "message": data.get("ResponseDescription", "Registered successfully"),
+            "message": data.get("Response Description", "Registered successfully"),
         }
 
     frappe.log_error(
@@ -715,7 +715,7 @@ def register_pull_transaction(mpesa_settings: str) -> dict:
     )
     return {
         "status": "error",
-        "message": data.get("ResponseDescription", "Registration failed"),
+        "message": data.get("Response Description", "Registration failed"),
     }
 
 
