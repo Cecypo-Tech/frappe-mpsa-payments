@@ -28,8 +28,6 @@
   "initiator_name",
   "initiator_password",
   "pull_transaction_nominated_number",
-  "register_pull_transaction",
-  "pull_transactions",
   "balance_details_section",
   "account_balance",
   "token_details_section",
@@ -319,16 +317,6 @@
    "fieldname": "pull_transaction_nominated_number",
    "fieldtype": "Data",
    "label": "Pull Transaction Nominated Number"
-  },
-  {
-   "fieldname": "register_pull_transaction",
-   "fieldtype": "Button",
-   "label": "Register Pull Transaction"
-  },
-  {
-   "fieldname": "pull_transactions",
-   "fieldtype": "Button",
-   "label": "Pull Transactions"
   }
  ],
  "links": [],

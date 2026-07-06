@@ -74,6 +74,17 @@ frappe.ui.form.on("Mpesa Settings", {
 			});
 		};
 		frappe.realtime.on("mpesa_pull_transaction_complete", frm._mpesa_pull_handler);
+
+		frm.add_custom_button(
+			__("Register Pull Transaction"),
+			() => frm.events.register_pull_transaction_action(frm),
+			__("Pull Transaction")
+		);
+		frm.add_custom_button(
+			__("Pull Transactions"),
+			() => frm.events.pull_transactions_action(frm),
+			__("Pull Transaction")
+		);
 	},
 
 	get_account_balance: function (frm) {
@@ -193,7 +204,7 @@ frappe.ui.form.on("Mpesa Settings", {
 		);
 	},
 
-	register_pull_transaction: function (frm) {
+	register_pull_transaction_action: function (frm) {
 		if (!frm.doc.pull_transaction_nominated_number) {
 			frappe.throw(__("Please set the Pull Transaction Nominated Number first."));
 			return;
@@ -239,7 +250,7 @@ frappe.ui.form.on("Mpesa Settings", {
 		);
 	},
 
-	pull_transactions: function (frm) {
+	pull_transactions_action: function (frm) {
 		if (!frm.doc.pull_transaction_nominated_number) {
 			frappe.throw(
 				__("Please set the Pull Transaction Nominated Number and register before pulling.")
