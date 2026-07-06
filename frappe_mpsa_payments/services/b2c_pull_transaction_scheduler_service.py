@@ -4,14 +4,14 @@ from frappe.utils import add_to_date, now_datetime
 from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import pull_transactions
 
 
-def run_daily_pull_transactions():
+def run_hourly_pull_transactions():
     settings_list = frappe.get_all(
         "Mpesa Settings",
         filters={"enable_daily_pull_transactions": 1},
         fields=["name"],
     )
     end_date = now_datetime()
-    start_date = add_to_date(end_date, hours=-24)
+    start_date = add_to_date(end_date, hours=-2)
 
     for row in settings_list:
         try:
