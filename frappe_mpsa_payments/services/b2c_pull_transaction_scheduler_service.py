@@ -24,5 +24,5 @@ def run_hourly_pull_transactions():
         except Exception:
             frappe.log_error(
                 frappe.get_traceback(),
-                f"[Daily Pull Transaction Error] {row.name}",
+                f"[Hourly Pull Transaction Error] {row.name}",
             )
