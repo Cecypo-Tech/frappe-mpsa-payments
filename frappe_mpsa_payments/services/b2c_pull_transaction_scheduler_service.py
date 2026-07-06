@@ -7,7 +7,7 @@ from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import pull_transa
 def run_hourly_pull_transactions():
     settings_list = frappe.get_all(
         "Mpesa Settings",
-        filters={"enable_daily_pull_transactions": 1},
+        filters={"enable_hourly_pull_transactions": 1},
         fields=["name"],
     )
     end_date = now_datetime()
