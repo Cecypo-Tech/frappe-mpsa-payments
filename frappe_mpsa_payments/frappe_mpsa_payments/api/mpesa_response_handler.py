@@ -129,6 +129,7 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
     transactions = _flatten_pull_transactions(response.get("Response", []))
 
     created, skipped, failed = 0, 0, 0
+    created_records = []
 
     for txn in transactions:
         try:
@@ -159,10 +160,12 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
             doc.transactiontype = txn.get("transactiontype", "")
             doc.insert(ignore_permissions=True)
 
-            frappe.log_error(
-                title="Mpesa Pull Transaction: Record Created",
-                message=f"transid={transid}, doc={doc.name}, amount={doc.transamount}, msisdn={doc.msisdn}",
-            )
+            created_records.append({
+                "transid": transid,
+                "doc": doc.name,
+                "amount": doc.transamount,
+                "msisdn": doc.msisdn,
+            })
             created += 1
 
         except Exception:
@@ -174,6 +177,12 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
             continue
 
     frappe.db.commit()
+
+    if created_records:
+        frappe.log_error(
+            title="Mpesa Pull Transaction: Records Created",
+            message=frappe.as_json(created_records),
+        )
 
     owner = frappe.session.user
     frappe.publish_realtime(
