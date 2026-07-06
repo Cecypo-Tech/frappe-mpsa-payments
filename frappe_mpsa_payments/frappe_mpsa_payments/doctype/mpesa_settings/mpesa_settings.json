@@ -28,6 +28,7 @@
   "initiator_name",
   "initiator_password",
   "pull_transaction_nominated_number",
+  "enable_daily_pull_transactions",
   "balance_details_section",
   "account_balance",
   "token_details_section",
@@ -317,6 +318,12 @@
    "fieldname": "pull_transaction_nominated_number",
    "fieldtype": "Data",
    "label": "Pull Transaction Nominated Number"
+  },
+  {
+   "fieldname": "enable_daily_pull_transactions",
+   "fieldtype": "Check",
+   "label": "Enable Daily Pull Transactions",
+   "description": "If checked, automatically pulls transactions for the last 24 hours once a day."
   }
  ],
  "links": [],
