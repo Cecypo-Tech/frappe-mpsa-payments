@@ -3,6 +3,7 @@
 
 
 import base64
+import re
 from json import dumps, loads
 from typing import Any
 from urllib.parse import urlparse
@@ -534,3 +535,88 @@ def trigger_transaction_status(mpesa_settings, transaction_id, remarks="OK"):
 
         frappe.log_error(title="Mpesa Transaction Status Error", message=str(e))
         return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist()
+def register_pull_transaction(mpesa_settings: str) -> dict:
+    import requests as _requests
+
+    from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import get_token
+    from frappe_mpsa_payments.utils.utils import build_callback_url
+
+    settings = frappe.get_doc("Mpesa Settings", mpesa_settings)
+
+    if not settings.pull_transaction_nominated_number:
+        frappe.throw(_("Pull Transaction Nominated Number is required."))
+
+    if not re.match(r"^254\d{9}$", settings.pull_transaction_nominated_number):
+        frappe.throw(
+            _(
+                "Pull Transaction Nominated Number must be in the format 254XXXXXXXXX (254 followed by 9 digits)."
+            )
+        )
+
+    base_url = (
+        "https://sandbox.safaricom.co.ke"
+        if settings.sandbox
+        else "https://api.safaricom.co.ke"
+    )
+
+    try:
+        token = get_token(
+            app_key=settings.consumer_key,
+            app_secret=settings.get_password("consumer_secret"),
+            base_url=base_url,
+        )
+        shortcode = (
+            settings.till_number if settings.sandbox else settings.business_shortcode
+        )
+        callback_url = build_callback_url(
+            "frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings.pull_transaction_callback"
+        )
+
+        payload = {
+            "ShortCode": shortcode,
+            "RequestType": "Pull",
+            "NominatedNumber": settings.pull_transaction_nominated_number,
+            "CallBackURL": callback_url,
+        }
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        resp = _requests.post(
+            f"{base_url}/pulltransactions/v1/register",
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        frappe.log_error(title="Mpesa Pull Transaction Registration Error", message=str(e))
+        return {"status": "error", "message": str(e)}
+
+    if data.get("Response Status") == "1000":
+        return {
+            "status": "success",
+            "message": data.get("Response Description", "Registered successfully"),
+        }
+
+    frappe.log_error(
+        title="Mpesa Pull Transaction Registration Error", message=str(data)
+    )
+    return {
+        "status": "error",
+        "message": data.get("Response Description", "Registration failed"),
+    }
+
+
+@frappe.whitelist(allow_guest=True)
+def pull_transaction_callback(**kwargs) -> dict:
+    frappe.log_error(
+        title="Mpesa Pull Transaction Callback",
+        message=frappe.as_json(kwargs),
+    )
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}

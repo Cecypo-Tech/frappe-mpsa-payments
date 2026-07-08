@@ -25,6 +25,8 @@ from ...utils.utils import (
 )
 from .mpesa_response_handler import (
     balance_query_on_success,
+    pull_transaction_on_error,
+    pull_transaction_on_success,
     stk_push_on_success,
     transaction_status_on_success,
 )
@@ -1021,3 +1023,81 @@ def verify_transaction(**kwargs) -> None:
             ),
         },
     )
+
+
+@frappe.whitelist()
+def pull_transactions(
+    mpesa_settings: str,
+    start_date: str,
+    end_date: str,
+    offset: int = 0,
+) -> dict:
+    def _fmt(dt_str: str) -> str:
+        return datetime.datetime.strptime(dt_str.strip(), "%Y-%m-%d %H:%M:%S").strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+    try:
+        settings = frappe.get_doc(MPESA_SETTINGS_DOCTYPE, mpesa_settings)
+        shortcode = settings.till_number if settings.sandbox else settings.business_shortcode
+
+        payload = {
+            "ShortCode": shortcode,
+            "StartDate": _fmt(start_date),
+            "EndDate": _fmt(end_date),
+            "OffSetValue": str(int(offset)),
+        }
+
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
+        return {"status": "error", "message": "Failed to pull transactions. Check Error Logs."}
+
+    try:
+        frappe.enqueue(
+            "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.execute_pull_transactions",
+            queue="long",
+            timeout=600,
+            mpesa_settings=mpesa_settings,
+            payload=payload,
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
+        return {"status": "error", "message": "Failed to pull transactions. Check Error Logs."}
+
+    return {
+        "status": "success",
+        "message": "Pull request queued. Importing transactions in the background...",
+    }
+
+
+def execute_pull_transactions(mpesa_settings: str, payload: dict) -> None:
+    """Call Safaricom's pull transactions endpoint and process the results.
+
+    Runs in the background (enqueued by `pull_transactions`) since the
+    Safaricom call plus C2B record creation/reconciliation can take a while
+    and shouldn't hold up the whitelisted request/response cycle.
+    """
+    try:
+        process_request(
+            endpoint="/pulltransactions/v1/query",
+            settings_name=mpesa_settings,
+            method="POST",
+            payload=payload,
+            success_callback=pull_transaction_on_success,
+            error_callback=pull_transaction_on_error,
+            request_description="Mpesa Pull Transaction",
+            doctype=MPESA_SETTINGS_DOCTYPE,
+            document_name=mpesa_settings,
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
+        frappe.publish_realtime(
+            event="mpesa_pull_transaction_complete",
+            message={
+                "status": "error",
+                "title": "Pull Transaction Failed",
+                "message": "Failed to pull transactions. Check Error Logs.",
+                "count": 0,
+            },
+            user=frappe.session.user,
+        )

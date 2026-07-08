@@ -31,6 +31,8 @@
   "transaction_limit",
   "initiator_name",
   "initiator_password",
+  "pull_transaction_nominated_number",
+  "enable_hourly_pull_transactions",
   "balance_details_section",
   "utility_account",
   "working_account",
@@ -293,10 +295,22 @@
    "fieldname": "submit_b2c_accounting_entries",
    "fieldtype": "Check",
    "label": "Submit B2C Accounting Entries"
+  },
+  {
+   "description": "Phone number nominated for Pull Transaction API (format: 254XXXXXXXXX — 254 followed by 9 digits)",
+   "fieldname": "pull_transaction_nominated_number",
+   "fieldtype": "Data",
+   "label": "Pull Transaction Nominated Number"
+  },
+  {
+   "fieldname": "enable_hourly_pull_transactions",
+   "fieldtype": "Check",
+   "label": "Enable Hourly Pull Transactions",
+   "description": "If checked, automatically pulls transactions for the last 2 hours once every hour."
   }
  ],
  "links": [],
- "modified": "2025-06-16 16:50:41.648423",
+ "modified": "2026-07-06 10:15:00.000000",
  "modified_by": "Administrator",
  "module": "Frappe Mpsa Payments",
  "name": "Mpesa Settings",
