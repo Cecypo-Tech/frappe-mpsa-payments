@@ -21,7 +21,72 @@ frappe.ui.form.on("Mpesa Settings", {
 				},
 			};
 		};
+
+		// Register the transaction status listener once per form load,
+		// removing any prior instance first so clicks never stack listeners.
+		if (frm._mpesa_status_handler) {
+			frappe.realtime.off("mpesa_transaction_status_update", frm._mpesa_status_handler);
+		}
+		frm._mpesa_status_handler = (data) => {
+			frappe.hide_progress();
+			if (frm._mpesa_status_timeout) {
+				clearTimeout(frm._mpesa_status_timeout);
+				frm._mpesa_status_timeout = null;
+			}
+			frappe.msgprint({
+				message: __(data.message),
+				title: __(data.title),
+				indicator:
+					data.status === "error"
+						? "red"
+						: data.status === "warning"
+						? "orange"
+						: "green",
+			});
+			if (data.document_name) {
+				frappe.show_alert({
+					message: __("View transaction: {0}", [data.document_name]),
+					indicator: "green",
+				});
+			}
+		};
+		frappe.realtime.on("mpesa_transaction_status_update", frm._mpesa_status_handler);
+
+		// Pull transaction completion listener — same off/on pattern
+		if (frm._mpesa_pull_handler) {
+			frappe.realtime.off("mpesa_pull_transaction_complete", frm._mpesa_pull_handler);
+		}
+		frm._mpesa_pull_handler = (data) => {
+			frappe.hide_progress();
+			if (frm._mpesa_pull_timeout) {
+				clearTimeout(frm._mpesa_pull_timeout);
+				frm._mpesa_pull_timeout = null;
+			}
+			frappe.msgprint({
+				message: __(data.message),
+				title: __(data.title),
+				indicator:
+					data.status === "error"
+						? "red"
+						: data.status === "warning"
+						? "orange"
+						: "green",
+			});
+		};
+		frappe.realtime.on("mpesa_pull_transaction_complete", frm._mpesa_pull_handler);
+
+		frm.add_custom_button(
+			__("Register Pull Transaction"),
+			() => frm.events.register_pull_transaction_action(frm),
+			__("Pull Transaction")
+		);
+		frm.add_custom_button(
+			__("Pull Transactions"),
+			() => frm.events.pull_transactions_action(frm),
+			__("Pull Transaction")
+		);
 	},
+
 	get_account_balance: function (frm) {
 		if (!frm.doc.initiator_name && !frm.doc.security_credential) {
 			frappe.throw(__("Please set the initiator name and the security credential"));
@@ -97,13 +162,32 @@ frappe.ui.form.on("Mpesa Settings", {
 						remarks: values.remarks,
 					},
 					callback: (r) => {
-						if (r.message && r.message.status === "queued") {
-						} else {
-							frappe.msgprint({
-								message: __(r.message.message),
-								title: r.message.status === "error" ? "Error" : "Success",
-								indicator: r.message.status === "error" ? "red" : "green",
-							});
+						if (r.message) {
+							if (r.message.status === "error") {
+								frappe.hide_progress();
+								frappe.msgprint({
+									message: __(r.message.message),
+									title: __("Error"),
+									indicator: "red",
+								});
+							} else {
+								frappe.show_progress(
+									__("Processing"),
+									50,
+									100,
+									__("Waiting for M-Pesa callback...")
+								);
+								// Auto-cancel progress if Safaricom never calls back
+								frm._mpesa_status_timeout = setTimeout(() => {
+									frappe.hide_progress();
+									frappe.show_alert({
+										message: __(
+											"No callback received from M-Pesa. Check Error Logs."
+										),
+										indicator: "orange",
+									});
+								}, 60000);
+							}
 						}
 					},
 					error: (err) => {
@@ -118,6 +202,162 @@ frappe.ui.form.on("Mpesa Settings", {
 			__("Transaction Status Query"),
 			__("Submit")
 		);
+	},
+
+	register_pull_transaction_action: function (frm) {
+		if (!frm.doc.pull_transaction_nominated_number) {
+			frappe.throw(__("Please set the Pull Transaction Nominated Number first."));
+			return;
+		}
+		frappe.confirm(
+			__("Register nominated number {0} with Safaricom for Pull Transaction?", [
+				frm.doc.pull_transaction_nominated_number,
+			]),
+			() => {
+				frappe.call({
+					method: "frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings.register_pull_transaction",
+					args: { mpesa_settings: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Registering with Safaricom..."),
+					callback: (r) => {
+						if (r.message && r.message.status === "success") {
+							frappe.show_alert({
+								message: __("Pull Transaction registered successfully."),
+								indicator: "green",
+							});
+						} else {
+							frappe.msgprint({
+								message: __(
+									r.message?.message ||
+										__("Registration failed. Check Error Logs.")
+								),
+								title: __("Registration Error"),
+								indicator: "red",
+							});
+						}
+					},
+					error: (err) => {
+						frappe.msgprint({
+							message: __("An error occurred: {0}", [
+								err.message || "Unknown error",
+							]),
+							title: __("Error"),
+							indicator: "red",
+						});
+					},
+				});
+			}
+		);
+	},
+
+	pull_transactions_action: function (frm) {
+		if (!frm.doc.pull_transaction_nominated_number) {
+			frappe.throw(
+				__("Please set the Pull Transaction Nominated Number and register before pulling.")
+			);
+			return;
+		}
+
+		const DATE_FORMAT = "YYYY-MM-DD HH:mm:ss";
+		const PULL_WINDOW_HOURS = 48;
+
+		const render_date_range_display = () => {
+			const end_value = d.get_value("end_date") || frappe.datetime.now_datetime();
+			const end_moment = moment(end_value, DATE_FORMAT);
+			const start_moment = end_moment.clone().subtract(PULL_WINDOW_HOURS, "hours");
+			d.fields_dict.date_range_display.$wrapper.html(
+				`<p>${__("Pulling transactions from {0} to {1}", [
+					`<b>${start_moment.format(DATE_FORMAT)}</b>`,
+					`<b>${end_moment.format(DATE_FORMAT)}</b>`,
+				])}</p>`
+			);
+		};
+
+		const d = new frappe.ui.Dialog({
+			title: __("Pull Transactions"),
+			fields: [
+				{
+					label: __("End Date"),
+					fieldname: "end_date",
+					fieldtype: "Datetime",
+					reqd: 1,
+					default: frappe.datetime.now_datetime(),
+					onchange: () => render_date_range_display(),
+				},
+				{
+					fieldname: "date_range_display",
+					fieldtype: "HTML",
+				},
+				{
+					label: __("Offset"),
+					fieldname: "offset",
+					fieldtype: "Int",
+					default: 0,
+					description: __("Page offset for pagination (0 = first page)"),
+				},
+			],
+			primary_action_label: __("Pull"),
+			primary_action: (values) => {
+				const end_moment = moment(values.end_date, DATE_FORMAT);
+				const start_date = end_moment
+					.clone()
+					.subtract(PULL_WINDOW_HOURS, "hours")
+					.format(DATE_FORMAT);
+
+				frappe.call({
+					method: "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.pull_transactions",
+					args: {
+						mpesa_settings: frm.doc.name,
+						start_date: start_date,
+						end_date: values.end_date,
+						offset: values.offset || 0,
+					},
+					freeze: true,
+					freeze_message: __("Pulling transactions from M-Pesa..."),
+					callback: (r) => {
+						if (r.message) {
+							if (r.message.status === "error") {
+								frappe.msgprint({
+									message: __(r.message.message),
+									title: __("Error"),
+									indicator: "red",
+								});
+							} else {
+								frappe.show_progress(
+									__("Processing"),
+									50,
+									100,
+									__("Importing transactions...")
+								);
+								frm._mpesa_pull_timeout = setTimeout(() => {
+									frappe.hide_progress();
+									frappe.show_alert({
+										message: __(
+											"Import is taking longer than expected. Check Error Logs."
+										),
+										indicator: "orange",
+									});
+								}, 60000);
+							}
+						}
+					},
+					error: (err) => {
+						frappe.msgprint({
+							message: __("An error occurred: {0}", [
+								err.message || "Unknown error",
+							]),
+							title: __("Error"),
+							indicator: "red",
+						});
+					},
+				});
+
+				d.hide();
+			},
+		});
+
+		d.show();
+		render_date_range_display();
 	},
 
 	update_match_field_options: function (frm, cdt, cdn) {

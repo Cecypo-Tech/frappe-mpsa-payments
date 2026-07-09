@@ -5,26 +5,22 @@ import unittest
 from json import dumps
 
 import frappe
-
-from frappe_mpsa_payment.doctype.mpesa_settings.mpesa_settings import (
-    process_balance_info,
-    verify_transaction,
-)
 from frappe_mpsa_payment.doctype.mpesa_settings.mpesa_settings import (
     create_mode_of_payment,
+    process_balance_info,
+    verify_transaction,
 )
 
 
 class TestMpesaSettings(unittest.TestCase):
-
     def setUp(self):
         from erpnext.accounts.doctype.payment_entry.test_payment_entry import (
             create_customer,
         )
-        from erpnext.stock.doctype.item.test_item import make_item
         from erpnext.accounts.doctype.pos_profile.test_pos_profile import (
             make_pos_profile,
         )
+        from erpnext.stock.doctype.item.test_item import make_item
 
         # create payment gateway in setup
         create_mpesa_settings(payment_gateway_name="_Test")
@@ -256,6 +252,141 @@ class TestMpesaSettings(unittest.TestCase):
         pr.cancel()
         pr.delete()
         pos_invoice.delete()
+
+    def test_register_pull_transaction_missing_nominated_number(self):
+        from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
+            register_pull_transaction,
+        )
+
+        # _Test settings has no pull_transaction_nominated_number
+        with self.assertRaises(frappe.exceptions.ValidationError):
+            register_pull_transaction("_Test")
+
+    def test_register_pull_transaction_success(self):
+        from unittest.mock import MagicMock, patch
+
+        from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
+            register_pull_transaction,
+        )
+
+        frappe.db.set_value(
+            "Mpesa Settings",
+            "_Test",
+            "pull_transaction_nominated_number",
+            "254712345678",
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "ResponseCode": "0",
+            "ResponseDescription": "Accept the service request successfully.",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with (
+            patch(
+                "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.get_token",
+                return_value="test_token",
+            ),
+            patch("requests.post", return_value=mock_response),
+        ):
+            result = register_pull_transaction("_Test")
+
+        self.assertEqual(result["status"], "success")
+        self.assertIn("Accept", result["message"])
+
+    def test_pull_transaction_on_success_creates_c2b_records(self):
+        from frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_response_handler import (
+            pull_transaction_on_success,
+        )
+
+        unique_txn_id = f"PULL{frappe.generate_hash()[:8].upper()}"
+        response = {
+            "ResponseCode": "1000",
+            "ResponseMessage": "Success",
+            "Response": [
+                [
+                    {
+                        "transactionId": unique_txn_id,
+                        "trxDate": "2026-06-01T12:00:00+03:00",
+                        "msisdn": "254712345678",
+                        "sender": "MPESA",
+                        "transactiontype": "c2b-paybill-debi",
+                        "billreference": "TEST-REF-001",
+                        "amount": "250.00",
+                        "organizationname": "Safaricom Daraja 978",
+                    }
+                ]
+            ],
+            "CurrentPage": 0,
+            "PageSize": 10,
+            "TotalPages": 1,
+            "TotalRecords": 1,
+        }
+
+        pull_transaction_on_success(
+            response=response,
+            document_name="_Test",
+            settings_name="_Test",
+            integration_request=None,
+        )
+
+        exists = frappe.db.exists(
+            "Mpesa C2B Payment Register", {"transid": unique_txn_id}
+        )
+        self.assertTrue(exists)
+        frappe.db.delete("Mpesa C2B Payment Register", {"transid": unique_txn_id})
+
+    def test_pull_transaction_on_success_skips_duplicates(self):
+        from frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_response_handler import (
+            pull_transaction_on_success,
+        )
+
+        unique_txn_id = f"DUP{frappe.generate_hash()[:8].upper()}"
+
+        # Pre-insert so it already exists
+        existing = frappe.get_doc(
+            {
+                "doctype": "Mpesa C2B Payment Register",
+                "transid": unique_txn_id,
+                "transamount": 100.0,
+                "msisdn": "254700000001",
+                "businessshortcode": "174379",
+            }
+        )
+        existing.insert(ignore_permissions=True)
+
+        response = {
+            "ResponseCode": "1000",
+            "Response": [
+                [
+                    {
+                        "transactionId": unique_txn_id,
+                        "trxDate": "2026-06-01T12:00:00+03:00",
+                        "msisdn": "254712345678",
+                        "sender": "MPESA",
+                        "transactiontype": "c2b-paybill-debi",
+                        "billreference": "",
+                        "amount": "100.00",
+                        "organizationname": "Safaricom Daraja 978",
+                    }
+                ]
+            ],
+        }
+
+        # Should not raise; duplicate is silently skipped
+        pull_transaction_on_success(
+            response=response,
+            document_name="_Test",
+            settings_name="_Test",
+            integration_request=None,
+        )
+
+        count = frappe.db.count(
+            "Mpesa C2B Payment Register", {"transid": unique_txn_id}
+        )
+        self.assertEqual(count, 1)
+        frappe.db.delete("Mpesa C2B Payment Register", {"transid": unique_txn_id})
 
     def test_processing_of_only_one_succes_callback_payload(self):
         from erpnext.accounts.doctype.pos_invoice.test_pos_invoice import (
