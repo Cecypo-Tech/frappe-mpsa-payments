@@ -252,23 +252,19 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
 
     created, skipped, failed = 0, 0, 0
     created_records = []
+    duplicate_transids = []
+    malformed = []
 
     for txn in transactions:
         try:
             transid = txn.get("transactionId", "")
             if not transid:
-                frappe.log_error(
-                    title="Mpesa Pull Transaction: Missing TransactionID",
-                    message=f"Transaction payload missing transactionId: {txn}",
-                )
+                malformed.append(str(txn))
                 skipped += 1
                 continue
 
             if frappe.db.exists(MPESA_C2B_PAYMENT_REGISTER_DOCTYPE, {"transid": transid}):
-                frappe.log_error(
-                    title="Mpesa Pull Transaction: Duplicate Skipped",
-                    message=f"transid={transid} already exists in {MPESA_C2B_PAYMENT_REGISTER_DOCTYPE}",
-                )
+                duplicate_transids.append(transid)
                 skipped += 1
                 continue
 
@@ -300,10 +296,31 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
 
     frappe.db.commit()
 
-    if created_records:
+    # One log per pull, not one per transaction. A busy shortcode re-pulls
+    # dozens of transactions the webhook already delivered, and logging each
+    # duplicate separately buried everything else.
+    if created_records or duplicate_transids or malformed:
+        summary = [
+            f"Settings: {settings.name}",
+            f"ShortCode: {shortcode!r}",
+            f"Window: {kwargs.get('payload', {})}",
+            f"Returned by Safaricom: {len(transactions)}",
+            f"Created: {created}   Skipped: {skipped}   Failed: {failed}",
+        ]
+        if created_records:
+            summary += ["", "Created:", frappe.as_json(created_records)]
+        if duplicate_transids:
+            summary += [
+                "",
+                f"Already present, skipped ({len(duplicate_transids)}):",
+                ", ".join(duplicate_transids),
+            ]
+        if malformed:
+            summary += ["", "Missing transactionId:"] + malformed
+
         frappe.log_error(
-            title="Mpesa Pull Transaction: Records Created",
-            message=frappe.as_json(created_records),
+            title=f"Mpesa Pull Transaction: {settings.name} - {created} created, {skipped} skipped",
+            message="\n".join(summary),
         )
 
     record_pull_outcome(
