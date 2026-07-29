@@ -24,13 +24,9 @@ from ...utils.utils import (
     update_mpesa_request_status,
 )
 from .mpesa_response_handler import (
-    BULK_PULL_FLAG,
-    BULK_PULL_RESULTS_FLAG,
     balance_query_on_success,
-    publish_pull_result,
     pull_transaction_on_error,
     pull_transaction_on_success,
-    record_pull_outcome,
     stk_push_on_success,
     transaction_status_on_success,
 )
@@ -1029,25 +1025,6 @@ def verify_transaction(**kwargs) -> None:
     )
 
 
-def build_pull_payload(
-    mpesa_settings: str, start_date: str, end_date: str, offset: int = 0
-) -> dict:
-    def _fmt(dt_str: str) -> str:
-        return datetime.datetime.strptime(dt_str.strip(), "%Y-%m-%d %H:%M:%S").strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-
-    settings = frappe.get_doc(MPESA_SETTINGS_DOCTYPE, mpesa_settings)
-    shortcode = settings.till_number if settings.sandbox else settings.business_shortcode
-
-    return {
-        "ShortCode": shortcode,
-        "StartDate": _fmt(start_date),
-        "EndDate": _fmt(end_date),
-        "OffSetValue": str(int(offset)),
-    }
-
-
 @frappe.whitelist()
 def pull_transactions(
     mpesa_settings: str,
@@ -1055,8 +1032,21 @@ def pull_transactions(
     end_date: str,
     offset: int = 0,
 ) -> dict:
+    def _fmt(dt_str: str) -> str:
+        return datetime.datetime.strptime(dt_str.strip(), "%Y-%m-%d %H:%M:%S").strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
     try:
-        payload = build_pull_payload(mpesa_settings, start_date, end_date, offset)
+        settings = frappe.get_doc(MPESA_SETTINGS_DOCTYPE, mpesa_settings)
+        shortcode = settings.till_number if settings.sandbox else settings.business_shortcode
+
+        payload = {
+            "ShortCode": shortcode,
+            "StartDate": _fmt(start_date),
+            "EndDate": _fmt(end_date),
+            "OffSetValue": str(int(offset)),
+        }
 
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
@@ -1080,280 +1070,34 @@ def pull_transactions(
     }
 
 
-# Connect timeouts to api.safaricom.co.ke are routine when the hourly job fans
-# out one request per Mpesa Settings doc. Retry rather than lose the window.
-PULL_MAX_ATTEMPTS = 3
-PULL_RETRY_BACKOFF_SECONDS = 2
-
-# Safety stop for the pagination walk, in case TotalPages is missing or wrong.
-PULL_MAX_PAGES = 50
-
-
 def execute_pull_transactions(mpesa_settings: str, payload: dict) -> None:
-    """Pull every page Safaricom has for the window, not just the first one.
+    """Call Safaricom's pull transactions endpoint and process the results.
 
-    Safaricom paginates: a 48h window on a busy shortcode came back as
-    TotalRecords 318 across TotalPages 4. We used to send OffSetValue once and
-    import whatever single page came back, silently dropping the rest unless
-    someone manually re-ran with offset 1, 2, 3. Now we walk the pages.
-
-    Runs in the background (enqueued by `pull_transactions`). Connection-level
-    failures are retried per page: the hourly job fans out one request per
-    Mpesa Settings doc against a single Safaricom host, so transient connect
-    timeouts are expected and shouldn't be treated as a lost pull.
+    Runs in the background (enqueued by `pull_transactions`) since the
+    Safaricom call plus C2B record creation/reconciliation can take a while
+    and shouldn't hold up the whitelisted request/response cycle.
     """
-    # A multi-page pull would otherwise fire one alert per page. Collect them
-    # and report once, unless a bulk run is already collecting.
-    outer_bulk = bool(frappe.flags.get(BULK_PULL_FLAG))
-    if not outer_bulk:
-        frappe.flags[BULK_PULL_FLAG] = True
-        frappe.flags[BULK_PULL_RESULTS_FLAG] = []
-
-    results = frappe.flags.get(BULK_PULL_RESULTS_FLAG)
-    first_result = len(results or [])
-
-    page = frappe.utils.cint(payload.get("OffSetValue") or 0)
-    last_error = None
-
     try:
-        while page < PULL_MAX_PAGES:
-            payload["OffSetValue"] = str(page)
-            data = _pull_one_page(mpesa_settings, payload)
-
-            if isinstance(data, Exception):
-                last_error = data
-                break
-            if data is None:
-                break
-
-            total_pages = frappe.utils.cint(data.get("TotalPages") or 0)
-            page += 1
-            if page >= total_pages:
-                break
-    finally:
-        if not outer_bulk:
-            frappe.flags[BULK_PULL_FLAG] = False
-
-    if last_error is None:
-        if not outer_bulk:
-            _publish_pull_summary(mpesa_settings, (results or [])[first_result:])
-        return
-
-    _handle_pull_failure(mpesa_settings, last_error)
-
-
-def _pull_one_page(mpesa_settings: str, payload: dict):
-    """One page, with retries. Returns the response, None, or the exception."""
-    for attempt in range(PULL_MAX_ATTEMPTS):
-        try:
-            return process_request(
-                endpoint="/pulltransactions/v1/query",
-                settings_name=mpesa_settings,
-                method="POST",
-                payload=payload,
-                success_callback=pull_transaction_on_success,
-                error_callback=pull_transaction_on_error,
-                request_description="Mpesa Pull Transaction",
-                doctype=MPESA_SETTINGS_DOCTYPE,
-                document_name=mpesa_settings,
-            )
-        except (
-            requests.exceptions.ConnectTimeout,
-            requests.exceptions.ConnectionError,
-            requests.exceptions.ReadTimeout,
-        ) as e:
-            if attempt < PULL_MAX_ATTEMPTS - 1:
-                time.sleep(PULL_RETRY_BACKOFF_SECONDS * (2**attempt))
-                continue
-            return e
-        except Exception as e:
-            # Not a network blip - don't burn retries on a real bug.
-            return e
-
-    return None
-
-
-def _publish_pull_summary(mpesa_settings: str, page_results: list) -> None:
-    """One alert for the whole pull, however many pages it took."""
-    if not page_results:
-        return
-
-    if len(page_results) == 1:
-        publish_pull_result(page_results[0])
-        return
-
-    created = sum(r.get("created") or 0 for r in page_results)
-    skipped = sum(r.get("skipped") or 0 for r in page_results)
-    failed = sum(r.get("failed") or 0 for r in page_results)
-
-    publish_pull_result(
-        {
-            "status": "success" if created or skipped else "warning",
-            "title": "Pull Transaction Complete",
-            "message": (
-                f"{mpesa_settings}: {created} record(s) imported, {skipped} skipped, "
-                f"{failed} failed across {len(page_results)} page(s)."
-            ),
-            "count": created,
-            "settings": mpesa_settings,
-            "created": created,
-            "skipped": skipped,
-            "failed": failed,
-        }
-    )
-
-
-def _handle_pull_failure(mpesa_settings: str, error) -> None:
-    is_network = isinstance(
-        error,
-        (
-            requests.exceptions.ConnectTimeout,
-            requests.exceptions.ConnectionError,
-            requests.exceptions.ReadTimeout,
-        ),
-    )
-
-    if is_network:
-        frappe.log_error(
-            f"Gave up after {PULL_MAX_ATTEMPTS} attempts: {error}",
-            f"Mpesa Pull Transaction Error [{mpesa_settings}]",
+        process_request(
+            endpoint="/pulltransactions/v1/query",
+            settings_name=mpesa_settings,
+            method="POST",
+            payload=payload,
+            success_callback=pull_transaction_on_success,
+            error_callback=pull_transaction_on_error,
+            request_description="Mpesa Pull Transaction",
+            doctype=MPESA_SETTINGS_DOCTYPE,
+            document_name=mpesa_settings,
         )
-        detail = f"connection failed after {PULL_MAX_ATTEMPTS} attempts"
-    else:
-        frappe.log_error(str(error), f"Mpesa Pull Transaction Error [{mpesa_settings}]")
-        detail = "Check Error Logs"
-
-    record_pull_outcome(mpesa_settings, status="Error", message=str(error or detail))
-
-    publish_pull_result(
-        {
-            "status": "error",
-            "title": "Pull Transaction Failed",
-            "message": f"{mpesa_settings}: Failed to pull transactions - {detail}.",
-            "count": 0,
-            "settings": mpesa_settings,
-        }
-    )
-
-
-@frappe.whitelist()
-def bulk_pull_transactions(
-    settings_names: str | list | None = None,
-    start_date: str = "",
-    end_date: str = "",
-    offset: int = 0,
-) -> dict:
-    """Queue one pull covering many shortcodes, reporting a single summary."""
-    frappe.only_for(["System Manager", "Administrator"])
-
-    if isinstance(settings_names, str):
-        settings_names = frappe.parse_json(settings_names)
-
-    if not settings_names:
-        settings_names = [
-            row.name
-            for row in frappe.get_all(
-                MPESA_SETTINGS_DOCTYPE,
-                filters={"enable_hourly_pull_transactions": 1},
-                fields=["name"],
-            )
-        ]
-
-    if not settings_names:
-        return {"status": "error", "message": _("No Mpesa Settings selected.")}
-
-    if not start_date or not end_date:
-        return {"status": "error", "message": _("Start and end date are required.")}
-
-    frappe.enqueue(
-        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api"
-        ".execute_bulk_pull_transactions",
-        queue="long",
-        timeout=3600,
-        settings_names=settings_names,
-        start_date=start_date,
-        end_date=end_date,
-        offset=offset,
-    )
-
-    return {
-        "status": "success",
-        "message": _("Pull queued for {0} shortcode(s). One summary will follow.").format(
-            len(settings_names)
-        ),
-        "count": len(settings_names),
-    }
-
-
-def execute_bulk_pull_transactions(
-    settings_names: list, start_date: str, end_date: str, offset: int = 0
-) -> None:
-    """Pull each shortcode in turn, collecting results into one summary.
-
-    Runs the pulls inline rather than enqueuing one job each, so the per-pull
-    toasts can be suppressed via BULK_PULL_FLAG and replaced by a single message.
-    """
-    frappe.flags[BULK_PULL_FLAG] = True
-    frappe.flags[BULK_PULL_RESULTS_FLAG] = []
-
-    skipped_settings = []
-
-    try:
-        for name in settings_names:
-            try:
-                payload = build_pull_payload(name, start_date, end_date, offset)
-            except Exception as e:
-                skipped_settings.append(f"{name}: {e}")
-                continue
-
-            try:
-                execute_pull_transactions(mpesa_settings=name, payload=payload)
-            except Exception:
-                frappe.log_error(
-                    frappe.get_traceback(),
-                    f"Mpesa Bulk Pull Error [{name}]",
-                )
-            frappe.db.commit()
-
-        results = frappe.flags.get(BULK_PULL_RESULTS_FLAG) or []
-    finally:
-        frappe.flags[BULK_PULL_FLAG] = False
-
-    imported = sum(r.get("created") or 0 for r in results)
-    no_data = [r for r in results if r.get("response_code") == "1001"]
-    errored = [r for r in results if r.get("status") == "error"]
-
-    summary_lines = [
-        f"Window: {start_date} -> {end_date}",
-        f"Shortcodes attempted: {len(settings_names)}",
-        f"Records imported: {imported}",
-        f"Returned no data (1001): {len(no_data)}",
-        f"Errored: {len(errored)}",
-        "",
-        "No data: " + ", ".join(str(r.get("settings")) for r in no_data),
-        "",
-        "Errors:",
-    ]
-    summary_lines += [f"  {r.get('message')}" for r in errored]
-    if skipped_settings:
-        summary_lines += ["", "Skipped (bad config):"] + [
-            f"  {s}" for s in skipped_settings
-        ]
-
-    frappe.log_error(
-        title="Mpesa Bulk Pull Transactions Complete",
-        message="\n".join(summary_lines),
-    )
-
-    frappe.publish_realtime(
-        event="mpesa_bulk_pull_complete",
-        message={
-            "status": "success" if not errored else "warning",
-            "title": "Bulk Pull Complete",
-            "message": (
-                f"{imported} record(s) imported across {len(settings_names)} shortcode(s). "
-                f"{len(no_data)} returned no data, {len(errored)} errored."
-            ),
-        },
-        user=frappe.session.user,
-    )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Mpesa Pull Transaction Error")
+        frappe.publish_realtime(
+            event="mpesa_pull_transaction_complete",
+            message={
+                "status": "error",
+                "title": "Pull Transaction Failed",
+                "message": "Failed to pull transactions. Check Error Logs.",
+                "count": 0,
+            },
+            user=frappe.session.user,
+        )
