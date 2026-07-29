@@ -4,6 +4,7 @@
 
 import base64
 import re
+import time
 from json import dumps, loads
 from typing import Any
 from urllib.parse import urlparse
@@ -19,6 +20,7 @@ from frappe.model.document import Document
 from frappe.utils import (
     fmt_money,
     get_request_site_address,
+    now_datetime,
 )
 from frappe.utils.file_manager import get_file_path
 
@@ -537,8 +539,46 @@ def trigger_transaction_status(mpesa_settings, transaction_id, remarks="OK"):
         return {"status": "error", "message": str(e)}
 
 
+# Safaricom throttles bursts; pace the batch rather than fire 69 requests flat out.
+BULK_REGISTRATION_DELAY_SECONDS = 1
+
+PULL_REGISTRATION_CALLBACK = (
+    "frappe_mpsa_payments.frappe_mpsa_payments.doctype"
+    ".mpesa_settings.mpesa_settings.pull_transaction_callback"
+)
+
+
+def _record_registration_outcome(settings_name: str, status: str, message: str) -> None:
+    """Persist pull registration state so enrollment is visible in the list view."""
+    try:
+        frappe.db.set_value(
+            "Mpesa Settings",
+            settings_name,
+            {
+                "pull_registration_status": status,
+                "pull_registration_message": (message or "")[:500],
+                "pull_registered_on": now_datetime(),
+            },
+            update_modified=False,
+        )
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            f"Mpesa Pull Registration: could not record outcome for {settings_name}",
+        )
+
+
 @frappe.whitelist()
-def register_pull_transaction(mpesa_settings: str) -> dict:
+def register_pull_transaction(mpesa_settings: str, callback_url: str | None = None) -> dict:
+    """Register a shortcode with Safaricom for Pull Transactions.
+
+    `callback_url` exists so bulk registration can capture the URL in the web
+    request context and pass it down. Built from the request Host header,
+    `build_callback_url` silently falls back to conf.host_name (or
+    http://<site>) when there is no request - and since Safaricom rejects
+    re-registration with "Shortcode already Registered!", a wrong URL baked in
+    from a background job cannot be corrected afterwards.
+    """
     import requests as _requests
 
     from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import get_token
@@ -571,9 +611,7 @@ def register_pull_transaction(mpesa_settings: str) -> dict:
         shortcode = (
             settings.till_number if settings.sandbox else settings.business_shortcode
         )
-        callback_url = build_callback_url(
-            "frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings.pull_transaction_callback"
-        )
+        callback_url = callback_url or build_callback_url(PULL_REGISTRATION_CALLBACK)
 
         payload = {
             "ShortCode": shortcode,
@@ -596,21 +634,147 @@ def register_pull_transaction(mpesa_settings: str) -> dict:
         data = resp.json()
     except Exception as e:
         frappe.log_error(title="Mpesa Pull Transaction Registration Error", message=str(e))
+        _record_registration_outcome(mpesa_settings, "Failed", str(e))
         return {"status": "error", "message": str(e)}
 
     if data.get("Response Status") == "1000":
-        return {
-            "status": "success",
-            "message": data.get("Response Description", "Registered successfully"),
-        }
+        description = data.get("Response Description", "Registered successfully")
+        _record_registration_outcome(mpesa_settings, "Registered", description)
+        return {"status": "success", "message": description}
+
+    description = data.get("Response Description", "Registration failed")
+
+    # Safaricom rejects a second registration for a shortcode already enrolled.
+    # That is not a failure to act on - it means the shortcode is already set up.
+    if "already registered" in str(description).lower():
+        _record_registration_outcome(mpesa_settings, "Already Registered", description)
+        return {"status": "already_registered", "message": description}
 
     frappe.log_error(
         title="Mpesa Pull Transaction Registration Error", message=str(data)
     )
+    _record_registration_outcome(mpesa_settings, "Failed", description)
+    return {"status": "error", "message": description}
+
+
+@frappe.whitelist()
+def bulk_register_pull_transactions(
+    settings_names: str | list | None = None, dry_run: int | bool = 0
+) -> dict:
+    """Queue pull registration for many shortcodes at once.
+
+    Registration is effectively one-way (Safaricom rejects re-registration), so
+    the CallBackURL is resolved here, inside the web request, and passed to the
+    worker rather than rebuilt there from an unreliable fallback.
+    """
+    from frappe_mpsa_payments.utils.utils import build_callback_url
+
+    frappe.only_for(["System Manager", "Administrator"])
+
+    if isinstance(settings_names, str):
+        settings_names = frappe.parse_json(settings_names)
+
+    if not settings_names:
+        settings_names = [
+            row.name
+            for row in frappe.get_all(
+                "Mpesa Settings",
+                filters={"pull_transaction_nominated_number": ["!=", ""]},
+                fields=["name"],
+            )
+        ]
+
+    if not settings_names:
+        return {"status": "error", "message": _("No Mpesa Settings to register.")}
+
+    try:
+        callback_url = build_callback_url(PULL_REGISTRATION_CALLBACK)
+    except RuntimeError:
+        # build_callback_url reads the request Host header and raises
+        # "object is not bound" with no request. Better to stop here than to
+        # register 60+ shortcodes against a guessed hostname we cannot correct.
+        frappe.throw(
+            _(
+                "Bulk pull registration must be run from the web interface so the "
+                "callback URL can be read from the request. Registration cannot be "
+                "undone, so it will not run with a guessed hostname."
+            )
+        )
+
+    if frappe.utils.cint(dry_run):
+        return {
+            "status": "dry_run",
+            "message": _("Would register {0} shortcode(s) with callback {1}").format(
+                len(settings_names), callback_url
+            ),
+            "count": len(settings_names),
+            "callback_url": callback_url,
+            "settings": settings_names,
+        }
+
+    frappe.enqueue(
+        "frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings"
+        ".mpesa_settings.execute_bulk_pull_registration",
+        queue="long",
+        timeout=3600,
+        settings_names=settings_names,
+        callback_url=callback_url,
+    )
+
     return {
-        "status": "error",
-        "message": data.get("Response Description", "Registration failed"),
+        "status": "success",
+        "message": _("Queued registration for {0} shortcode(s).").format(
+            len(settings_names)
+        ),
+        "count": len(settings_names),
+        "callback_url": callback_url,
     }
+
+
+def execute_bulk_pull_registration(settings_names: list, callback_url: str) -> None:
+    """Register each shortcode in turn, isolating failures so one cannot abort the batch."""
+    registered, already, failed = [], [], []
+
+    for name in settings_names:
+        try:
+            result = register_pull_transaction(name, callback_url=callback_url)
+            status = result.get("status")
+            if status == "success":
+                registered.append(name)
+            elif status == "already_registered":
+                already.append(name)
+            else:
+                failed.append(f"{name}: {result.get('message')}")
+        except Exception as e:
+            # Includes the frappe.throw for a missing nominated number.
+            failed.append(f"{name}: {e}")
+            _record_registration_outcome(name, "Failed", str(e))
+
+        frappe.db.commit()
+        time.sleep(BULK_REGISTRATION_DELAY_SECONDS)
+
+    summary = (
+        f"Registered: {len(registered)}\n"
+        f"Already registered: {len(already)}\n"
+        f"Failed: {len(failed)}\n\n"
+        f"Callback URL used: {callback_url}\n\n"
+        f"Newly registered: {registered}\n\n"
+        f"Failures:\n" + "\n".join(failed)
+    )
+    frappe.log_error(title="Mpesa Bulk Pull Registration Complete", message=summary)
+
+    frappe.publish_realtime(
+        event="mpesa_bulk_pull_registration_complete",
+        message={
+            "status": "success" if not failed else "warning",
+            "title": "Bulk Pull Registration Complete",
+            "message": (
+                f"{len(registered)} registered, {len(already)} already registered, "
+                f"{len(failed)} failed."
+            ),
+        },
+        user=frappe.session.user,
+    )
 
 
 @frappe.whitelist(allow_guest=True)
