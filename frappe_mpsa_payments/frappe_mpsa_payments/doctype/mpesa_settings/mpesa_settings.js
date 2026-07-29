@@ -258,13 +258,6 @@ frappe.ui.form.on("Mpesa Settings", {
 					fieldname: "date_range_display",
 					fieldtype: "HTML",
 				},
-				{
-					label: __("Offset"),
-					fieldname: "offset",
-					fieldtype: "Int",
-					default: 0,
-					description: __("Page offset for pagination (0 = first page)"),
-				},
 			],
 			primary_action_label: __("Pull"),
 			primary_action: (values) => {
@@ -280,7 +273,6 @@ frappe.ui.form.on("Mpesa Settings", {
 						mpesa_settings: frm.doc.name,
 						start_date: start_date,
 						end_date: values.end_date,
-						offset: values.offset || 0,
 					},
 					freeze: true,
 					freeze_message: __("Pulling transactions from M-Pesa..."),
