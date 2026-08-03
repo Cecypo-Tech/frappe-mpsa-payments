@@ -27,6 +27,16 @@
   "transaction_limit",
   "initiator_name",
   "initiator_password",
+  "pull_transaction_nominated_number",
+  "enable_hourly_pull_transactions",
+  "pull_registration_status",
+  "pull_registered_on",
+  "pull_registration_message",
+  "pull_status_section",
+  "last_pull_status",
+  "last_pull_response_code",
+  "last_pull_on",
+  "last_pull_message",
   "balance_details_section",
   "account_balance",
   "token_details_section",
@@ -253,7 +263,7 @@
   },
   {
    "depends_on": "eval: doc.auto_reconcile_c2b",
-   "description": "Defines the order and fields used to auto-reconcile M-Pesa C2B payments. The system matches payments sequentially based on this table (e.g., Customer by ID \u2192 Customer by PIN \u2192 Sales Invoice by ID) until a successful reconciliation. Works for PayBill transactions referencing an account.",
+   "description": "Defines the order and fields used to auto-reconcile M-Pesa C2B payments. The system matches payments sequentially based on this table (e.g., Customer by ID → Customer by PIN → Sales Invoice by ID) until a successful reconciliation. Works for PayBill transactions referencing an account.",
    "fieldname": "reconciliation_order",
    "fieldtype": "Table",
    "label": "Reconciliation Priority",
@@ -310,6 +320,71 @@
    "fieldtype": "Table",
    "label": "Exchange Rates",
    "options": "Mpesa Conversion Rate"
+  },
+  {
+   "description": "Phone number nominated for Pull Transaction API (format: 254XXXXXXXXX — 254 followed by 9 digits)",
+   "fieldname": "pull_transaction_nominated_number",
+   "fieldtype": "Data",
+   "label": "Pull Transaction Nominated Number"
+  },
+  {
+   "fieldname": "enable_hourly_pull_transactions",
+   "fieldtype": "Check",
+   "label": "Enable Hourly Pull Transactions",
+   "description": "If checked, automatically pulls transactions for the last 2 hours once every hour."
+  },
+  {
+   "description": "Set by Register Pull Transaction. 'Already Registered' means Safaricom already has this shortcode enrolled.",
+   "fieldname": "pull_registration_status",
+   "fieldtype": "Select",
+   "label": "Pull Registration Status",
+   "options": "\nRegistered\nAlready Registered\nFailed",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "pull_registered_on",
+   "fieldtype": "Datetime",
+   "label": "Pull Registered On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pull_registration_message",
+   "fieldtype": "Small Text",
+   "label": "Pull Registration Message",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pull_status_section",
+   "fieldtype": "Section Break",
+   "label": "Last Pull Result"
+  },
+  {
+   "description": "Success = Safaricom returned data. No Data = code 1001, which also means the shortcode may not be provisioned for Pull. Error = the request failed.",
+   "fieldname": "last_pull_status",
+   "fieldtype": "Select",
+   "label": "Last Pull Status",
+   "options": "\nSuccess\nNo Data\nError",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "last_pull_response_code",
+   "fieldtype": "Data",
+   "label": "Last Pull Response Code",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_pull_on",
+   "fieldtype": "Datetime",
+   "label": "Last Pull On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_pull_message",
+   "fieldtype": "Small Text",
+   "label": "Last Pull Message",
+   "read_only": 1
   }
  ],
  "links": [],

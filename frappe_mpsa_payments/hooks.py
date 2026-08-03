@@ -22,6 +22,7 @@ fixtures = [
     },
 ]
 
+before_tests = "frappe_mpsa_payments.setup.utils.before_tests"
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -172,7 +173,10 @@ scheduler_events = {
         "*/15 * * * *": [
             "frappe_mpsa_payments.services.b2c_scheduler_service.update_b2c_disbursement_statuses"
         ]
-    }
+    },
+    "hourly": [
+        "frappe_mpsa_payments.services.b2c_pull_transaction_scheduler_service.run_hourly_pull_transactions"
+    ],
 }
 
 # Testing
