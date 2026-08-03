@@ -141,6 +141,11 @@ PULL_NO_RECORDS_HINT = (
 BULK_PULL_FLAG = "mpesa_bulk_pull"
 BULK_PULL_RESULTS_FLAG = "mpesa_bulk_pull_results"
 
+# Set only when sweeping many shortcodes at once (hourly job, bulk pull action).
+# In that mode a per-shortcode 1001 is noise: most branches simply took no
+# payments in the window, and the run writes one summary listing all of them.
+BULK_PULL_BATCH_FLAG = "mpesa_bulk_pull_batch"
+
 
 def publish_pull_result(message: dict) -> None:
     """Emit one toast per pull - unless a bulk run is collecting them.
@@ -239,10 +244,13 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
             log_message.append("")
             log_message.append(PULL_NO_RECORDS_HINT)
 
-        frappe.log_error(
-            title=f"Mpesa Pull Transaction: {response_code} from Safaricom",
-            message="\n".join(log_message),
-        )
+        # In a batch sweep the summary covers this; logging each shortcode
+        # separately produced ~800 near-identical entries a day.
+        if not frappe.flags.get(BULK_PULL_BATCH_FLAG):
+            frappe.log_error(
+                title=f"Mpesa Pull Transaction: {response_code} from Safaricom",
+                message="\n".join(log_message),
+            )
 
         record_pull_outcome(
             settings.name,
