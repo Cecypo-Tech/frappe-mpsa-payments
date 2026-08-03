@@ -23,6 +23,7 @@ from ...utils.utils import (
     update_mpesa_request_status,
 )
 from .mpesa_response_handler import (
+    BULK_PULL_BATCH_FLAG,
     BULK_PULL_FLAG,
     BULK_PULL_RESULTS_FLAG,
     balance_query_on_success,
@@ -1250,6 +1251,7 @@ def execute_bulk_pull_transactions(
     toasts can be suppressed via BULK_PULL_FLAG and replaced by a single message.
     """
     frappe.flags[BULK_PULL_FLAG] = True
+    frappe.flags[BULK_PULL_BATCH_FLAG] = True
     frappe.flags[BULK_PULL_RESULTS_FLAG] = []
 
     skipped_settings = []
@@ -1274,6 +1276,7 @@ def execute_bulk_pull_transactions(
         results = frappe.flags.get(BULK_PULL_RESULTS_FLAG) or []
     finally:
         frappe.flags[BULK_PULL_FLAG] = False
+        frappe.flags[BULK_PULL_BATCH_FLAG] = False
 
     imported = sum(r.get("created") or 0 for r in results)
     no_data = [r for r in results if r.get("response_code") == "1001"]
