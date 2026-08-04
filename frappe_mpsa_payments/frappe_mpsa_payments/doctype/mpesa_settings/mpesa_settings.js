@@ -22,6 +22,27 @@ frappe.ui.form.on("Mpesa Settings", {
 			};
 		};
 
+		// The pull runs in the background, so the result arrives by realtime.
+		// Re-register on each refresh, dropping any prior instance so repeated
+		// form loads don't stack listeners and fire the message several times.
+		if (frm._mpesa_pull_handler) {
+			frappe.realtime.off("mpesa_pull_transaction_complete", frm._mpesa_pull_handler);
+		}
+		frm._mpesa_pull_handler = (data) => {
+			frappe.hide_progress();
+			if (frm._mpesa_pull_timeout) {
+				clearTimeout(frm._mpesa_pull_timeout);
+				frm._mpesa_pull_timeout = null;
+			}
+			frappe.msgprint({
+				message: __(data.message),
+				title: __(data.title),
+				indicator:
+					data.status === "error" ? "red" : data.status === "warning" ? "orange" : "green",
+			});
+		};
+		frappe.realtime.on("mpesa_pull_transaction_complete", frm._mpesa_pull_handler);
+
 		frm.add_custom_button(
 			__("Register Pull Transaction"),
 			() => frm.events.register_pull_transaction_action(frm),
