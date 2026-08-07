@@ -297,7 +297,15 @@ def initiate_stk_push(**args) -> any:
         amount = args.request_amount
         business_shortcode = mpesa_settings.business_shortcode
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        reference_name = args.get("reference_name", "Online Payment")
+        # A standalone push - phone number and amount, no linked document - still
+        # sends the reference_name key, with None as its value. dict.get() only
+        # falls back to the default when the key is *absent*, so the default never
+        # applied here and Daraja rejected the null with "Invalid Remarks".
+        reference_name = (
+            args.get("reference_name")
+            or args.get("document_name")
+            or "Online Payment"
+        )
 
         payload = {
             "BusinessShortCode": business_shortcode,
