@@ -63,12 +63,15 @@ class TestMPesaAPI(FrappeTestCase):
 
     def _stk_payload(self, mock_process, **overrides):
         """Fire initiate_stk_push with process_request stubbed, return the payload."""
+        # Mirrors initiate_request(): every key is sent, None included.
         args = {
             "payment_gateway": "Mpesa-898102",
             "phone_number": "254727870777",
             "request_amount": 1,
             "doctype": "Mpesa Express Request",
             "document_name": "MEXP-26-08-000004",
+            "reference_name": None,
+            "account_reference": None,
         }
         args.update(overrides)
 
@@ -81,7 +84,9 @@ class TestMPesaAPI(FrappeTestCase):
         return mock_process.call_args.kwargs["payload"]
 
     @patch("frappe.get_doc")
-    @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url")
+    @patch(
+        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url"
+    )
     @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.process_request")
     def test_stk_push_account_reference_never_null(
         self, mock_process, mock_callback, mock_get_doc
@@ -111,7 +116,9 @@ class TestMPesaAPI(FrappeTestCase):
         self.assertEqual(payload["TransactionDesc"], "MEXP-26-08-000004")
 
     @patch("frappe.get_doc")
-    @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url")
+    @patch(
+        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url"
+    )
     @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.process_request")
     def test_stk_push_reference_name_wins_over_document_name(
         self, mock_process, mock_callback, mock_get_doc
@@ -130,7 +137,39 @@ class TestMPesaAPI(FrappeTestCase):
         self.assertEqual(payload["AccountReference"], "SINV-00042")
 
     @patch("frappe.get_doc")
-    @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url")
+    @patch(
+        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url"
+    )
+    @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.process_request")
+    def test_stk_push_prefers_caller_supplied_account_reference(
+        self, mock_process, mock_callback, mock_get_doc
+    ):
+        """The Pay Bill account number wins over anything we could infer.
+
+        A POS supplies this before the sale exists as a document, and it is what
+        the customer's statement shows and what returns as BillRefNumber.
+        """
+        mock_callback.return_value = "https://example.com/callback"
+        settings = Mock()
+        settings.name = "898102"
+        settings.business_shortcode = "898102"
+        settings.paybill_type = "Pay Bill"
+        settings.get_password.return_value = "passkey"
+        mock_get_doc.return_value = settings
+
+        payload = self._stk_payload(
+            mock_process,
+            account_reference="ACC-2026-001",
+            reference_name="SINV-00042",
+        )
+
+        self.assertEqual(payload["AccountReference"], "ACC-2026-001")
+        self.assertEqual(payload["TransactionDesc"], "ACC-2026-001")
+
+    @patch("frappe.get_doc")
+    @patch(
+        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url"
+    )
     @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.process_request")
     def test_stk_push_falls_back_when_nothing_identifies_the_push(
         self, mock_process, mock_callback, mock_get_doc
