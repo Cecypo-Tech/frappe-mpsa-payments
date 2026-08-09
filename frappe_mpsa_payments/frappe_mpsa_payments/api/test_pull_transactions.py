@@ -12,7 +12,9 @@ from unittest.mock import patch
 import frappe
 
 from frappe_mpsa_payments.frappe_mpsa_payments.api import m_pesa_api as api
-from frappe_mpsa_payments.frappe_mpsa_payments.api import mpesa_response_handler as handler
+from frappe_mpsa_payments.frappe_mpsa_payments.api import (
+    mpesa_response_handler as handler,
+)
 
 SETTINGS_NAME = "_Pull Test"
 
@@ -33,12 +35,17 @@ class TestPullTransactionResponses(unittest.TestCase):
 
         frappe.flags[handler.BULK_PULL_BATCH_FLAG] = batch
         try:
-            with patch.object(handler.frappe, "get_doc", return_value=_StubSettings()), patch.object(
-                handler, "record_pull_outcome"
-            ), patch.object(
-                handler, "publish_pull_result", side_effect=published.append
-            ), patch.object(
-                handler.frappe, "log_error", side_effect=lambda *a, **k: logged.append(k.get("title"))
+            with (
+                patch.object(handler.frappe, "get_doc", return_value=_StubSettings()),
+                patch.object(handler, "record_pull_outcome"),
+                patch.object(
+                    handler, "publish_pull_result", side_effect=published.append
+                ),
+                patch.object(
+                    handler.frappe,
+                    "log_error",
+                    side_effect=lambda *a, **k: logged.append(k.get("title")),
+                ),
             ):
                 handler.pull_transaction_on_success(
                     response=response,
@@ -98,18 +105,24 @@ class TestPullPagination(unittest.TestCase):
         def fake_request(**kwargs):
             requested.append(int(kwargs["payload"]["OffSetValue"]))
             kwargs["success_callback"](
-                response={"ResponseCode": "1000", "Response": [], "TotalPages": total_pages},
+                response={
+                    "ResponseCode": "1000",
+                    "Response": [],
+                    "TotalPages": total_pages,
+                },
                 document_name=SETTINGS_NAME,
                 settings_name=SETTINGS_NAME,
                 integration_request=None,
             )
             return {"ResponseCode": "1000", "TotalPages": total_pages}
 
-        with patch.object(api, "process_request", side_effect=fake_request), patch.object(
-            api.frappe, "publish_realtime"
-        ), patch.object(handler.frappe, "get_doc", return_value=_StubSettings()), patch.object(
-            handler, "record_pull_outcome"
-        ), patch.object(handler.frappe, "log_error"):
+        with (
+            patch.object(api, "process_request", side_effect=fake_request),
+            patch.object(api.frappe, "publish_realtime"),
+            patch.object(handler.frappe, "get_doc", return_value=_StubSettings()),
+            patch.object(handler, "record_pull_outcome"),
+            patch.object(handler.frappe, "log_error"),
+        ):
             api.execute_pull_transactions(
                 mpesa_settings=SETTINGS_NAME,
                 payload={"ShortCode": "898048", "OffSetValue": "0"},
