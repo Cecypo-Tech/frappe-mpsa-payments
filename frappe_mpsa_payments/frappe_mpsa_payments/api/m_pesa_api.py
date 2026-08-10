@@ -566,7 +566,7 @@ def get_mpesa_mode_of_payment(company):
     return modes_of_payment
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_mpesa_draft_c2b_payments(
     company,
     full_name=None,
@@ -608,7 +608,7 @@ def get_mpesa_draft_c2b_payments(
     return payments
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_draft_pos_invoice(search_term=None):
     from frappe import qb
     from frappe.query_builder import DocType
