@@ -1,7 +1,7 @@
 import frappe
 from frappe import _
+from frappe.rate_limiter import rate_limit
 from frappe.utils import now
-import json
 
 
 def get_context(context):
@@ -43,6 +43,7 @@ def load_existing(request_id):
 def build_mpesa_context(doc):
     return {
         "name": doc.name,
+        "request_id": doc.request_id,
         "phone_number": clean(doc.phone_number),
         "payment_gateway": doc.payment_gateway,
         "reference_type": doc.reference_doctype,
@@ -69,9 +70,19 @@ def clean(value):
     return value
 
 
-@frappe.whitelist()
-def initiate_stk_push(name, phone_number):
-    doc = frappe.get_doc("Mpesa Express Request", name)
+# These three are reachable without logging in, because the payer is a
+# customer following a link, not a user. The request_id in that link is the
+# only credential they hold: 32 hex characters from frappe.generate_hash.
+#
+# They must therefore be addressed by request_id and never by document name.
+# Names are sequential (MEXP-26-08-000004), so accepting one would let anyone
+# walk the series and fire pushes against other people's requests.
+
+
+@frappe.whitelist(allow_guest=True)
+@rate_limit(key="request_id", limit=5, seconds=60)
+def initiate_stk_push(request_id, phone_number):
+    doc = load_existing(request_id)
     doc.flags.ignore_permissions = True
     doc.phone_number = phone_number
     doc.save(ignore_permissions=True)
@@ -79,9 +90,10 @@ def initiate_stk_push(name, phone_number):
     return {"message": "STK Push initiated"}
 
 
-@frappe.whitelist()
-def retry_stkpush(name, phone_number):
-    doc = frappe.get_doc("Mpesa Express Request", name)
+@frappe.whitelist(allow_guest=True)
+@rate_limit(key="request_id", limit=5, seconds=60)
+def retry_stkpush(request_id, phone_number):
+    doc = load_existing(request_id)
     doc.flags.ignore_permissions = True
     doc.phone_number = phone_number
     doc.status = "In Progress"
@@ -90,16 +102,17 @@ def retry_stkpush(name, phone_number):
     return {"message": "STK Push initiated"}
 
 
-@frappe.whitelist()
-def check_payment_status(name):
-    doc = frappe.get_doc("Mpesa Express Request", name)
+@frappe.whitelist(allow_guest=True)
+@rate_limit(key="request_id", limit=120, seconds=60)
+def check_payment_status(request_id):
+    doc = load_existing(request_id)
 
     # For Payment Entries, redirect only after reconciliation. This prevents
     # a transaction status query from redirecting to a draft Payment Entry.
     redirect_to = doc.redirect_to
     if doc.reference_doctype == "Payment Entry" and not doc.is_reconciled:
         redirect_to = None
-    
+
     return {
         "status": doc.status,
         "docstatus": doc.docstatus,
