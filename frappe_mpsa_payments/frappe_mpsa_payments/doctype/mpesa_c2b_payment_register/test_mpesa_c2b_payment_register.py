@@ -21,12 +21,30 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
     order was hardcoded, so configuring the table changed nothing.
     """
 
-    def setUp(self):
-        # get_meta hits the database on a cold cache, and these tests patch
-        # frappe.db.get_value out from under it. Warm the metas first so the
-        # patch only ever intercepts the lookups under test.
+    #: Captured once, before any patching, so the tests never need the database.
+    METAS = {}
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
         for doctype in ("Sales Invoice", "Sales Order", "Quotation", "Customer"):
-            frappe.get_meta(doctype)
+            cls.METAS[doctype] = frappe.get_meta(doctype)
+
+    def _metas(self):
+        """Serve real metas from the capture, and raise for anything unknown.
+
+        These tests patch frappe.db.get_value, which get_meta also uses on a
+        cold cache - and a failed lookup can clear that cache mid-test. Serving
+        metas from a pre-captured dict keeps the patch confined to the lookups
+        actually under test.
+        """
+
+        def fake_get_meta(doctype, *args, **kwargs):
+            if doctype in self.METAS:
+                return self.METAS[doctype]
+            raise frappe.DoesNotExistError(doctype)
+
+        return patch("frappe.get_meta", side_effect=fake_get_meta)
 
     def _register(self, **fields):
         doc = frappe.new_doc("Mpesa C2B Payment Register")
@@ -36,22 +54,51 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         doc.update(fields)
         return doc
 
-    def _with_priority(self, rows):
-        """Patch the configured rows without touching Mpesa Settings."""
-        return patch.object(
-            frappe.model.document.Document,
-            "_reconciliation_order",
-            lambda _self: rows,
-            create=True,
-        )
-
     def test_unconfigured_settings_keep_the_historical_order(self):
         doc = self._register()
 
-        with patch("frappe.db.get_value", return_value=None), patch(
-            "frappe.get_all", return_value=[]
+        with (
+            patch("frappe.db.get_value", return_value=None),
+            patch("frappe.get_all", return_value=[]),
         ):
-            self.assertEqual(doc._reconciliation_order(), list(DEFAULT_RECONCILIATION_ORDER))
+            self.assertEqual(
+                doc._reconciliation_order(), list(DEFAULT_RECONCILIATION_ORDER)
+            )
+
+    def test_fallback_issues_exactly_the_original_queries(self):
+        """Characterisation: an unconfigured install must query as it always did.
+
+        Pinned against the pre-change implementation, which walked a hardcoded
+        list of (doctype, customer_field, extra_filters) matching on name.
+        """
+        doc = self._register(billrefnumber="ACC-001")
+        original = [
+            ("Sales Invoice", {"name": "ACC-001", "docstatus": 1}, "customer"),
+            ("Sales Order", {"name": "ACC-001", "docstatus": 1}, "customer"),
+            (
+                "Quotation",
+                {"name": "ACC-001", "docstatus": 1, "quotation_to": "Customer"},
+                "party_name",
+            ),
+            ("Customer", {"name": "ACC-001"}, "name"),
+        ]
+
+        with (
+            self._metas(),
+            patch.object(
+                type(doc),
+                "_reconciliation_order",
+                lambda _self: list(DEFAULT_RECONCILIATION_ORDER),
+            ),
+            patch("frappe.db.get_value", return_value=None) as mock_get_value,
+        ):
+            doc._find_customer_from_billref("ACC-001")
+
+        issued = [
+            (call.args[0], call.args[1], call.args[2])
+            for call in mock_get_value.call_args_list
+        ]
+        self.assertEqual(issued, original)
 
     def test_configured_rows_replace_the_default_order(self):
         doc = self._register()
@@ -60,8 +107,9 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
             frappe._dict(target_doctype="Sales Invoice", match_field="name"),
         ]
 
-        with patch("frappe.db.get_value", return_value="898102"), patch(
-            "frappe.get_all", return_value=rows
+        with (
+            patch("frappe.db.get_value", return_value="898102"),
+            patch("frappe.get_all", return_value=rows),
         ):
             self.assertEqual(
                 doc._reconciliation_order(),
@@ -72,8 +120,9 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         doc = self._register()
         rows = [frappe._dict(target_doctype="Sales Order", match_field=None)]
 
-        with patch("frappe.db.get_value", return_value="898102"), patch(
-            "frappe.get_all", return_value=rows
+        with (
+            patch("frappe.db.get_value", return_value="898102"),
+            patch("frappe.get_all", return_value=rows),
         ):
             self.assertEqual(doc._reconciliation_order(), [("Sales Order", "name")])
 
@@ -81,9 +130,15 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         """The whole point: a non-name match_field must reach the query."""
         doc = self._register(billrefnumber="P051234567X")
 
-        with patch.object(
-            type(doc), "_reconciliation_order", lambda _self: [("Customer", "tax_id")]
-        ), patch("frappe.db.get_value", return_value="CUST-0001") as mock_get_value:
+        with (
+            self._metas(),
+            patch.object(
+                type(doc),
+                "_reconciliation_order",
+                lambda _self: [("Customer", "tax_id")],
+            ),
+            patch("frappe.db.get_value", return_value="CUST-0001") as mock_get_value,
+        ):
             doc._find_customer_from_billref("P051234567X")
 
         self.assertEqual(doc.customer, "CUST-0001")
@@ -95,9 +150,14 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         doc = self._register()
         order = [("Sales Invoice", "name"), ("Customer", "name")]
 
-        with patch.object(type(doc), "_reconciliation_order", lambda _self: order), patch(
-            "frappe.db.get_value", side_effect=["CUST-FROM-INVOICE", "CUST-FROM-CUSTOMER"]
-        ) as mock_get_value:
+        with (
+            self._metas(),
+            patch.object(type(doc), "_reconciliation_order", lambda _self: order),
+            patch(
+                "frappe.db.get_value",
+                side_effect=["CUST-FROM-INVOICE", "CUST-FROM-CUSTOMER"],
+            ) as mock_get_value,
+        ):
             doc._find_customer_from_billref("ACC-001")
 
         self.assertEqual(doc.customer, "CUST-FROM-INVOICE")
@@ -107,8 +167,10 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         doc = self._register()
         order = [("No Such Doctype", "name"), ("Customer", "name")]
 
-        with patch.object(type(doc), "_reconciliation_order", lambda _self: order), patch(
-            "frappe.db.get_value", return_value="CUST-0001"
+        with (
+            self._metas(),
+            patch.object(type(doc), "_reconciliation_order", lambda _self: order),
+            patch("frappe.db.get_value", return_value="CUST-0001"),
         ):
             doc._find_customer_from_billref("ACC-001")
 
@@ -119,8 +181,10 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         doc = self._register(customer="CUST-0001")
         order = [("Sales Order", "name"), ("Sales Invoice", "name")]
 
-        with patch.object(type(doc), "_reconciliation_order", lambda _self: order), patch(
-            "frappe.get_value", return_value="SO-0001"
+        with (
+            self._metas(),
+            patch.object(type(doc), "_reconciliation_order", lambda _self: order),
+            patch("frappe.get_value", return_value="SO-0001"),
         ):
             invoice, sales_order = doc._get_matching_refs()
 
@@ -132,5 +196,8 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         doc = self._register(customer="CUST-0001")
         order = [("Customer", "name")]
 
-        with patch.object(type(doc), "_reconciliation_order", lambda _self: order):
+        with (
+            self._metas(),
+            patch.object(type(doc), "_reconciliation_order", lambda _self: order),
+        ):
             self.assertEqual(doc._get_matching_refs(), (None, None))
