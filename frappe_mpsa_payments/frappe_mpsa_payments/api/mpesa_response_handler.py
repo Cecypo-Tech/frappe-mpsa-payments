@@ -150,7 +150,7 @@ BULK_PULL_BATCH_FLAG = "mpesa_bulk_pull_batch"
 def publish_pull_result(message: dict) -> None:
     """Emit one toast per pull - unless a bulk run is collecting them.
 
-    A bulk pull over 69 shortcodes would otherwise fire 69 separate popups. The
+    A bulk pull over many shortcodes would otherwise fire one popup each. The
     bulk worker sets the flag, runs everything in its own job, and publishes a
     single summary at the end.
     """
