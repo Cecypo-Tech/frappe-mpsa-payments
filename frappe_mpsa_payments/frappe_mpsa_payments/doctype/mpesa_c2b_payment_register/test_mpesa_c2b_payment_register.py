@@ -65,6 +65,25 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
                 doc._reconciliation_order(), list(DEFAULT_RECONCILIATION_ORDER)
             )
 
+    def test_table_is_dormant_while_auto_reconcile_is_off(self):
+        """Rows left behind by someone who disabled auto reconciliation must
+        not keep steering matching. The field is only shown while the toggle
+        is on, so it should only apply while the toggle is on."""
+        doc = self._register()
+        rows = [frappe._dict(target_doctype="Customer", match_field="tax_id")]
+
+        with (
+            patch(
+                "frappe.db.get_value",
+                return_value=frappe._dict(name="SHORTCODE", auto_reconcile_c2b=0),
+            ),
+            patch("frappe.get_all", return_value=rows) as mock_get_all,
+        ):
+            order = doc._reconciliation_order()
+
+        self.assertEqual(order, list(DEFAULT_RECONCILIATION_ORDER))
+        self.assertFalse(mock_get_all.called, "configured rows were read anyway")
+
     def test_fallback_issues_exactly_the_original_queries(self):
         """Characterisation: an unconfigured install must query as it always did.
 
@@ -108,7 +127,10 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         ]
 
         with (
-            patch("frappe.db.get_value", return_value="898102"),
+            patch(
+                "frappe.db.get_value",
+                return_value=frappe._dict(name="SHORTCODE", auto_reconcile_c2b=1),
+            ),
             patch("frappe.get_all", return_value=rows),
         ):
             self.assertEqual(
@@ -121,7 +143,10 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         rows = [frappe._dict(target_doctype="Sales Order", match_field=None)]
 
         with (
-            patch("frappe.db.get_value", return_value="898102"),
+            patch(
+                "frappe.db.get_value",
+                return_value=frappe._dict(name="SHORTCODE", auto_reconcile_c2b=1),
+            ),
             patch("frappe.get_all", return_value=rows),
         ):
             self.assertEqual(doc._reconciliation_order(), [("Sales Order", "name")])

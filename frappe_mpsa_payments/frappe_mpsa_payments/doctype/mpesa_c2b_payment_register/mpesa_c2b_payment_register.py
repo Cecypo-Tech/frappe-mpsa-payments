@@ -209,15 +209,25 @@ class MpesaC2BPaymentRegister(Document):
                 )
 
     def _reconciliation_order(self) -> list[tuple[str, str]]:
-        """The configured priority for this shortcode, newest config winning.
+        """The configured priority for this shortcode.
 
-        Falls back to the historical hardcoded order when nothing is set, so an
-        unconfigured install is unaffected.
+        Falls back to the historical hardcoded order when the table is empty,
+        so an unconfigured install is unaffected.
+
+        The table only appears in the form while auto_reconcile_c2b is on, so
+        it stays dormant while that is off - otherwise rows left behind by
+        someone who disabled auto reconciliation would quietly keep steering
+        customer resolution, which runs whether or not the toggle is set.
         """
-        settings_name = frappe.db.get_value(
+        settings = frappe.db.get_value(
             "Mpesa Settings",
             {"business_shortcode": self.businessshortcode},
-            "name",
+            ["name", "auto_reconcile_c2b"],
+            as_dict=True,
+        )
+
+        settings_name = (
+            settings.name if settings and settings.auto_reconcile_c2b else None
         )
 
         rows = []
