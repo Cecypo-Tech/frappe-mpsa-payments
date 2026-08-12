@@ -27,8 +27,12 @@ def get_context(context):
     if context.is_completed:
         context.success = _("Payment completed successfully")
     if context.is_failed:
+        # result_desc is the outcome Safaricom sent back ("Request Cancelled by
+        # user"). response_description only says whether the push was accepted
+        # for delivery, so on a failure it reads "Success..." and tells the
+        # payer nothing about why their payment did not go through.
         context.error = _("Payment failed: {0}").format(
-            doc.response_description or _("Unknown error")
+            doc.result_desc or doc.response_description or _("Unknown error")
         )
     context.cache_buster = now()
 
@@ -116,6 +120,10 @@ def check_payment_status(request_id):
     return {
         "status": doc.status,
         "docstatus": doc.docstatus,
+        # Both: result_* is the outcome, response_description only covers
+        # whether Safaricom accepted the push for delivery.
+        "result_code": doc.result_code,
+        "result_desc": doc.result_desc,
         "response_description": doc.response_description,
         "redirect_to": redirect_to,
     }
