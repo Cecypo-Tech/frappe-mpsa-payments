@@ -283,6 +283,7 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
     created_records = []
     duplicate_transids = []
     malformed = []
+    failures = []
 
     for txn in transactions:
         try:
@@ -319,8 +320,9 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
             )
             created += 1
 
-        except Exception:
+        except Exception as e:
             failed += 1
+            failures.append(f"{txn.get('transactionId', '?')}: {e}")
             frappe.log_error(
                 frappe.get_traceback(),
                 f"Mpesa Pull Transaction: Failed for transid={txn.get('transactionId', '')}",
@@ -332,7 +334,7 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
     # One log per pull, not one per transaction. A busy shortcode re-pulls
     # dozens of transactions the webhook already delivered, and logging each
     # duplicate separately buried everything else.
-    if created_records or duplicate_transids or malformed:
+    if created_records or duplicate_transids or malformed or failures:
         summary = [
             f"Settings: {settings.name}",
             f"ShortCode: {shortcode!r}",
@@ -350,9 +352,16 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
             ]
         if malformed:
             summary += ["", "Missing transactionId:"] + malformed
+        if failures:
+            # Without this a failed row left only a count, and finding out which
+            # payment went missing meant hunting through separate error logs.
+            summary += ["", f"Failed ({len(failures)}):"] + failures
 
         frappe.log_error(
-            title=f"Mpesa Pull Transaction: {settings.name} - {created} created, {skipped} skipped",
+            title=(
+                f"Mpesa Pull Transaction: {settings.name} - {created} created, "
+                f"{skipped} skipped, {failed} failed"
+            ),
             message="\n".join(summary),
         )
 

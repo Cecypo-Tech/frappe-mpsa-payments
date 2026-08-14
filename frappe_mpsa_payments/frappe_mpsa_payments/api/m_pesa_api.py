@@ -420,7 +420,6 @@ def stk_push_callback(**kwargs) -> None:
             message=realtime_payload,
         )
 
-        request_doc.validate_duplicate_c2b_records()
 
         integration_req = frappe.get_doc(
             "Integration Request", {"output": ["like", f"%{checkout_request_id}%"]}
@@ -544,17 +543,6 @@ def delayed_insert_c2b(c2b_data: dict) -> None:
     """
     try:
         time.sleep(1)
-
-        if c2b_data.get("transid"):
-            express_exists = frappe.db.exists(
-                "Mpesa Express Request", {"transaction_id": c2b_data["transid"]}
-            )
-            if express_exists:
-                frappe.log_error(
-                    f"C2B {c2b_data['transid']} blocked due to existing Express Request",
-                    "C2B Insert Skipped",
-                )
-                return
 
         doc = frappe.new_doc("Mpesa C2B Payment Register")
         for k, v in c2b_data.items():
