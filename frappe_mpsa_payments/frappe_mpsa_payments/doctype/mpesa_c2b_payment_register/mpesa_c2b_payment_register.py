@@ -14,44 +14,11 @@ from frappe_mpsa_payments.frappe_mpsa_payments.api.payment_entry import (
 
 class MpesaC2BPaymentRegister(Document):
     def before_insert(self):
-        if self.thirdpartytransid:
-            er = frappe.db.get_value(
-                "Mpesa Express Request",
-                {"merchant_request_id": self.thirdpartytransid},
-                ["name", "status"],
-                as_dict=True,
-            )
-            if er:
-                frappe.log_error(
-                    message=f"Blocked C2B because matching Express Request {er.name} "
-                    f"already exists (status={er.status})",
-                    title="Mpesa C2B Insert Blocked",
-                )
-                frappe.throw(
-                    _(
-                        "Cannot record C2B payment: Express Request {0} already exists"
-                    ).format(er.name)
-                )
-
-        if self.transid:
-            er2 = frappe.db.get_value(
-                "Mpesa Express Request",
-                {"transaction_id": self.transid},
-                ["name", "status"],
-                as_dict=True,
-            )
-            if er2:
-                frappe.log_error(
-                    message=f"Duplicate C2B payment detected: {self.transid} "
-                    f"already exists in Express Request {er2.name}",
-                    title="Mpesa C2B Duplicate",
-                )
-                frappe.throw(
-                    _(
-                        "Cannot record C2B payment: Transaction already captured in Express Request {0}"
-                    ).format(er2.name)
-                )
-
+        # An STK push and a paybill payment are the same money arriving. The
+        # C2B record used to be refused whenever an Express Request held the
+        # same receipt, which kept the payment out of the register entirely and
+        # meant nothing ever reconciled. The register now owns the payment; the
+        # Express Request owns the prompt and its status.
         self.set_missing_values()
 
     def after_insert(self):
@@ -63,6 +30,16 @@ class MpesaC2BPaymentRegister(Document):
             )
 
             if not auto_reconcile:
+                return
+
+            # One payment, one Payment Entry. When the matching Express Request
+            # points at a Payment Request, that flow creates the entry itself,
+            # so this record stays a draft for the audit trail rather than
+            # posting the same money twice.
+            if self.transid and frappe.db.exists(
+                "Mpesa Express Request",
+                {"transaction_id": self.transid, "reference_doctype": "Payment Request"},
+            ):
                 return
 
             self.db_set("submit_payment", 1)
@@ -145,23 +122,6 @@ class MpesaC2BPaymentRegister(Document):
             self.payment_entry = payment_entry.name
 
     def on_submit(self):
-        if self.transid:
-            exists = frappe.db.exists(
-                "Mpesa Express Request", {"transaction_id": self.transid}
-            )
-            if exists:
-                frappe.db.savepoint("before_c2b_submit")
-                try:
-                    self.cancel()
-                    frappe.throw(
-                        _(
-                            "Duplicate C2B transaction {0}. Cancelled automatically."
-                        ).format(self.transid)
-                    )
-                except Exception:
-                    frappe.db.rollback(save_point="before_c2b_submit")
-                    raise
-
         if frappe.db.get_global("is_manual_reconciliation") == "1":
             return
 
