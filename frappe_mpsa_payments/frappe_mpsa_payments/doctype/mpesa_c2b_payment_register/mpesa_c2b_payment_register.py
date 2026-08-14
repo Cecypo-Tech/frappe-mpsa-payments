@@ -4,6 +4,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils import flt
 
 from frappe_mpsa_payments.frappe_mpsa_payments.api.payment_entry import (
     create_and_reconcile_payment_reconciliation,
@@ -38,7 +39,10 @@ class MpesaC2BPaymentRegister(Document):
             # posting the same money twice.
             if self.transid and frappe.db.exists(
                 "Mpesa Express Request",
-                {"transaction_id": self.transid, "reference_doctype": "Payment Request"},
+                {
+                    "transaction_id": self.transid,
+                    "reference_doctype": "Payment Request",
+                },
             ):
                 return
 
@@ -184,7 +188,8 @@ class MpesaC2BPaymentRegister(Document):
         invoice, order = self._get_matching_refs()
 
         if order and settings.auto_create_sales_invoice:
-            self._create_sales_invoice_from_order(order)
+            if self._order_is_settled(order) and not self._order_already_billed(order):
+                self._create_sales_invoice_from_order(order)
 
         else:
             # Fallback: FIFO
@@ -242,6 +247,32 @@ class MpesaC2BPaymentRegister(Document):
             "name",
         )
 
+    def _order_is_settled(self, sales_order: str) -> bool:
+        """Has the order been paid for in full, counting every part payment?
+
+        Several people can settle one order between them, so an invoice must
+        wait for the last of them rather than being raised on the first payment
+        for the whole amount.
+        """
+        order = frappe.db.get_value(
+            "Sales Order", sales_order, ["grand_total", "advance_paid"], as_dict=True
+        )
+        if not order:
+            return False
+
+        # advance_paid is updated by the Payment Entry that has just been
+        # submitted, so it already includes this payment.
+        return flt(order.advance_paid) + 0.005 >= flt(order.grand_total)
+
+    def _order_already_billed(self, sales_order: str) -> bool:
+        """An invoice for this order already exists, so do not raise a second."""
+        return bool(
+            frappe.db.exists(
+                "Sales Invoice Item",
+                {"sales_order": sales_order, "docstatus": ["<", 2]},
+            )
+        )
+
     def _create_sales_invoice_from_order(self, sales_order):
         try:
             from erpnext.selling.doctype.sales_order.sales_order import (
@@ -249,7 +280,10 @@ class MpesaC2BPaymentRegister(Document):
             )
 
             si = make_sales_invoice(sales_order)
-            # si.allocate_advances_automatically = True
+            # The order was paid before it was billed, so the money is sitting
+            # as advances against it. Without this the invoice is raised showing
+            # its full value outstanding even though nothing is owed.
+            si.allocate_advances_automatically = 1
             si.insert(ignore_permissions=True)
             si.submit()
 
