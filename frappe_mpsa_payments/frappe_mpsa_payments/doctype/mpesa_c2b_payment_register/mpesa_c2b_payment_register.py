@@ -129,10 +129,18 @@ class MpesaC2BPaymentRegister(Document):
         if frappe.db.get_global("is_manual_reconciliation") == "1":
             return
 
+        messages = list(frappe.local.message_log or [])
+
         try:
             self._reconcile_payment()
 
         except Exception as e:
+            # Reconciliation is a follow-up, not the point of submitting this
+            # record: the payment is already on the books either way. A failure
+            # here belongs in the Error Log, not in a red banner over whatever
+            # the user was actually doing, so drop whatever the attempt pushed
+            # onto the message log on its way out.
+            frappe.local.message_log = messages
             frappe.log_error(
                 frappe.get_traceback(), f"C2B Reconciliation Error: {str(e)}"
             )
@@ -191,7 +199,7 @@ class MpesaC2BPaymentRegister(Document):
             if self._order_is_settled(order) and not self._order_already_billed(order):
                 self._create_sales_invoice_from_order(order)
 
-        else:
+        elif self._has_unallocated_funds():
             # Fallback: FIFO
             outstanding_invoices = get_outstanding_invoices(
                 customer=self.customer, company=self.company
@@ -199,6 +207,24 @@ class MpesaC2BPaymentRegister(Document):
 
             if outstanding_invoices:
                 self._reconcile_against_invoice(outstanding_invoices)
+
+    def _has_unallocated_funds(self) -> bool:
+        """Is any of this payment still looking for an invoice to settle?
+
+        Another flow can own the Payment Entry - a POS or quick-pay screen
+        that builds and allocates it against an order before submitting this
+        record. There is then nothing left to reconcile, and handing an empty
+        allocation to the Payment Reconciliation tool is what makes it throw
+        "No records found in Allocation table".
+        """
+        return (
+            flt(
+                frappe.db.get_value(
+                    "Payment Entry", self.payment_entry, "unallocated_amount"
+                )
+            )
+            > 0
+        )
 
     def _get_matching_refs(self):
         """
