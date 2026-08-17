@@ -125,6 +125,16 @@
   {
    "hidden": 0,
    "is_query_report": 0,
+   "label": "Mpesa Statement Import",
+   "link_count": 0,
+   "link_to": "Mpesa Statement Import",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
    "label": "Mpesa Payment Reconciliation",
    "link_count": 0,
    "link_to": "Mpesa Payment Reconciliation",

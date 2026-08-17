@@ -1,6 +1,8 @@
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+from frappe_mpsa_payments.setup.install import setup_importer_role
+
 from .patches.mpesa_custom_fields import create_custom_pos_fields
 
 MODULE = "Frappe Mpsa Payments"
@@ -11,6 +13,10 @@ def is_app_installed(app_name: str) -> bool:
 
 
 def after_migrate():
+    # The statement importer's role and its narrow permission set are code, not
+    # fixtures, so they are re-asserted on every migrate.
+    setup_importer_role()
+
     if is_app_installed("payments"):
         update_settings_module()
 

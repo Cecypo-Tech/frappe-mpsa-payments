@@ -1,0 +1,220 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "MPESA-IMP-.YYYY.-.#####",
+ "creation": "2026-07-28 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "statement_section",
+  "statement_file",
+  "column_break_statement",
+  "file_hash",
+  "parsed_section",
+  "business_shortcode",
+  "account_holder",
+  "statement_period",
+  "column_break_parsed",
+  "total_rows",
+  "payment_rows",
+  "results_section",
+  "created_count",
+  "skipped_count",
+  "column_break_results",
+  "blocked_count",
+  "failed_count",
+  "summary_section",
+  "import_summary",
+  "amended_from"
+ ],
+ "fields": [
+  {
+   "fieldname": "statement_section",
+   "fieldtype": "Section Break",
+   "label": "Statement File"
+  },
+  {
+   "allow_on_submit": 0,
+   "description": "The M-Pesa Utility Account statement to import.",
+   "fieldname": "statement_file",
+   "fieldtype": "Attach",
+   "in_standard_filter": 0,
+   "label": "Statement File",
+   "no_copy": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_statement",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "SHA-256 of the uploaded file. Set automatically; enforces one import per file.",
+   "fieldname": "file_hash",
+   "fieldtype": "Data",
+   "label": "File Hash",
+   "no_copy": 1,
+   "print_hide": 1,
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "parsed_section",
+   "fieldtype": "Section Break",
+   "label": "Parsed Statement"
+  },
+  {
+   "fieldname": "business_shortcode",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Business Shortcode",
+   "read_only": 1
+  },
+  {
+   "fieldname": "account_holder",
+   "fieldtype": "Data",
+   "label": "Account Holder",
+   "read_only": 1
+  },
+  {
+   "fieldname": "statement_period",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Statement Period",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_parsed",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "total_rows",
+   "fieldtype": "Int",
+   "label": "Total Rows",
+   "read_only": 1
+  },
+  {
+   "fieldname": "payment_rows",
+   "fieldtype": "Int",
+   "label": "Rows With Paid In > 0",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.docstatus==1",
+   "fieldname": "results_section",
+   "fieldtype": "Section Break",
+   "label": "Import Results"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "created_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Created",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "description": "Receipt already present in Mpesa C2B Payment Register.",
+   "fieldname": "skipped_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Skipped",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_results",
+   "fieldtype": "Column Break"
+  },
+  {
+   "allow_on_submit": 1,
+   "description": "Receipt already captured by an STK push (Mpesa Express Request).",
+   "fieldname": "blocked_count",
+   "fieldtype": "Int",
+   "label": "Blocked",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "failed_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Failed",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.docstatus==1",
+   "fieldname": "summary_section",
+   "fieldtype": "Section Break",
+   "label": "Summary"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "import_summary",
+   "fieldtype": "Text Editor",
+   "label": "Import Summary",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Mpesa Statement Import",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-07-28 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Frappe Mpsa Payments",
+ "name": "Mpesa Statement Import",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "amend": 0,
+   "cancel": 0,
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 0,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
