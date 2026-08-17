@@ -9,3 +9,4 @@
 # frappe_mpsa_payments.frappe_mpsa_payments.patches.mpesa_custom_fields
 frappe_mpsa_payments.frappe_mpsa_payments.patches.c2b_payment_register
 frappe_mpsa_payments.frappe_mpsa_payments.patches.payment_entry_custom_fields
+frappe_mpsa_payments.frappe_mpsa_payments.patches.add_statement_import_to_workspace
