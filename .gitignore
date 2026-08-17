@@ -20,3 +20,10 @@ tags
 /.vscode
 /__pycache__/
 .gstack/
+
+# M-Pesa statements contain customer names and partial phone numbers.
+# Never commit a real statement to this repo. The synthetic test fixture is
+# the only .xls that belongs here.
+*.xls
+*.xlsx
+!frappe_mpsa_payments/tests/fixtures/sample_statement.xls

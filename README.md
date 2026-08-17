@@ -30,6 +30,7 @@ Frappe Mpesa Payments is a custom [Frappe](https://frappe.io/framework) applicat
   - [4. 🔍 Mpesa Payment Reconciliation](#4--mpesa-payment-reconciliation)
   - [5. ❓Query Transaction Status](#5-query-transaction-status)
     - [Use Cases:](#use-cases-1)
+  - [6. 📄 Import an Mpesa Statement](#6--import-an-mpesa-statement)
 - [Key DocTypes](#key-doctypes)
 - [🔐 Security](#-security)
 - [🛠️ Troubleshooting](#️-troubleshooting)
@@ -345,6 +346,113 @@ https://github.com/user-attachments/assets/c31fe0fc-6843-4ba6-ac6a-504a60257964
 
 - Verify delayed or failed transactions.
 - Add missing transactions to the system for reconciliation.
+
+---
+
+### 6. 📄 Import an Mpesa Statement
+
+Backfills payments that never arrived by webhook or pull, from the `.xls`
+Utility Account statement exported by the Safaricom org portal, into the
+**Mpesa C2B Payment Register**.
+
+Only the legacy OLE2 `.xls` the portal produces is read; `.xlsx` is not
+supported.
+
+**🔧 How It Works:**
+
+1. Open **Mpesa Statement Import**, attach the `.xls`, and **save**. Parsing
+   happens on save, so the shortcode, statement period and row counts are
+   filled in for you to sanity-check before anything is written.
+2. **Submit.** Every payment row is imported and the outcome written back to
+   the document:
+
+| Outcome | Meaning |
+| ------- | ------- |
+| **Created** | New record in the Mpesa C2B Payment Register |
+| **Skipped** | `transid` already present |
+| **Blocked** | Already captured as an STK push (Mpesa Express Request) |
+| **Failed** | Errored; the reason is in the summary table |
+
+Each run also writes exactly one **Error Log** entry with the full per-row
+outcome in its body.
+
+> **Note:** imported records follow the same path as live webhook records. If
+> `auto_reconcile_c2b` is enabled for the shortcode, submitting an import will
+> auto-submit each new record, create a Payment Entry, and run reconciliation.
+> Review the parsed counts on save before you submit.
+
+**📖 How the statement is read**
+
+A Utility Account statement lists **every transaction twice**: once as a
+`Pay Bill Charge` line (negative `Withdrawn`, blank `Paid In`) and once as the
+actual customer payment (`Paid In` > 0). Only the second is a real receipt, so
+the parser keeps rows where `Paid In` > 0 and checks that their amounts sum to
+the `Total Paid In:` figure in the file's own header — a mis-parsed file fails
+loudly instead of importing silently.
+
+`Receipt No.` becomes `transid` and is the deduplication key. `company`,
+`mode_of_payment` and `full_name` are derived by the register's own
+`set_missing_values`, from the shortcode's **Mpesa C2B Payment Register URL**.
+
+**🔁 Duplicate protection**
+
+`transid` has no unique constraint on the register, so deduplication is
+entirely application-level. Four layers, plus one backstop:
+
+1. **In-file** — the `Paid In > 0` filter collapses the duplicated charge rows.
+2. **Pre-flight** — a receipt still appearing twice among payment rows aborts
+   the import before a single record is written.
+3. **Per-row** — `transid` already in the register → _skipped_.
+4. **Per-file** — `file_hash` is unique, so re-uploading the same statement is
+   rejected outright.
+5. **Backstop** — the register refuses transactions already captured as an
+   Mpesa Express Request. These are pre-checked and counted as _blocked_
+   rather than being allowed to raise.
+
+**🔒 Statement data is masked**
+
+Safaricom masks personal data in statement exports:
+
+```
+Other Party Info:  25471****456 - JANE **** DOE
+```
+
+Records created from a statement therefore carry a **masked `msisdn`** and no
+middle name, where the same transaction arriving by webhook would carry the
+full `2547XXXXXXXX` number and the full name. This is stored as-is and is
+deliberate: the masked value keeps the record traceable to its statement line
+and is visibly distinguishable from live webhook data, so it is never mistaken
+for a dialable number. Mask tokens (`****`) are dropped from name fields rather
+than stored.
+
+Consequently: **never commit a real statement to this repository.** The tests
+use a synthetic fixture with fictional data, and `.gitignore` blocks `*.xls`
+as a safety net.
+
+**👤 The restricted uploader**
+
+A `Mpesa Statement Importer` role is created on install and re-asserted on
+every migrate. It has create/read/write/submit on **Mpesa Statement Import**
+and nothing else — no delete, no cancel, no amend, no export, and no access at
+all to the Mpesa C2B Payment Register.
+
+Create such a user (no password on the command line; Frappe emails a setup
+link):
+
+```bash
+bench --site <site> execute \
+    frappe_mpsa_payments.setup.install.create_importer_user \
+    --kwargs '{"email": "importer@example.com", "first_name": "Statement"}'
+```
+
+**🧪 Tests**
+
+The parser is a plain library that never imports `frappe`, so its tests need no
+site:
+
+```bash
+env/bin/python -m pytest apps/frappe_mpsa_payments/frappe_mpsa_payments/tests/
+```
 
 ---
 

@@ -256,3 +256,4 @@ scheduler_events = {
 
 
 after_migrate = "frappe_mpsa_payments.frappe_mpsa_payments.migrate.after_migrate"
+after_install = "frappe_mpsa_payments.setup.install.after_install"

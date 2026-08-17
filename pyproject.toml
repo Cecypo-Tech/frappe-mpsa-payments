@@ -9,6 +9,7 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=15.0.0" # Installed and managed by bench.
+    "xlrd>=2.0.1",  # reads the legacy OLE2 .xls that Safaricom's portal exports
 ]
 
 [tool.bench.frappe-dependencies]
