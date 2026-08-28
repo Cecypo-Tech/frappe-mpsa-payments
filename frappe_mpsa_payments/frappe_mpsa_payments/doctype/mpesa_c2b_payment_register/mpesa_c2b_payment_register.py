@@ -190,7 +190,14 @@ class MpesaC2BPaymentRegister(Document):
         it stays dormant while that is off - otherwise rows left behind by
         someone who disabled auto reconciliation would quietly keep steering
         customer resolution, which runs whether or not the toggle is set.
+
+        Cached per document: this is consulted on insert, again before submit
+        and again on submit, and the configuration cannot change in between.
         """
+        cached = getattr(self, "_cached_reconciliation_order", None)
+        if cached is not None:
+            return cached
+
         settings = frappe.db.get_value(
             "Mpesa Settings",
             {"business_shortcode": self.businessshortcode},
@@ -218,7 +225,8 @@ class MpesaC2BPaymentRegister(Document):
                 if row.target_doctype
             ]
 
-        return rows or list(DEFAULT_RECONCILIATION_ORDER)
+        self._cached_reconciliation_order = rows or list(DEFAULT_RECONCILIATION_ORDER)
+        return self._cached_reconciliation_order
 
     def _match_filters(self, doctype: str, match_field: str) -> dict:
         filters = {match_field: self.billrefnumber}
@@ -234,15 +242,18 @@ class MpesaC2BPaymentRegister(Document):
 
         return filters
 
-    def _usable_match(self, doctype: str, match_field: str) -> tuple[str, str] | None:
-        """Guard a configured row against a doctype or field that no longer exists."""
+    def _usable_match(self, doctype: str, match_field: str) -> str | None:
+        """The field naming the customer, or None if this row cannot be used.
+
+        Guards a configured row against a doctype or field that no longer
+        exists - a row can outlive the doctype or the app it points at.
+        """
         if not doctype:
             return None
 
         try:
             meta = frappe.get_meta(doctype)
-        except Exception:
-            # A configured row can outlive the doctype or app it points at.
+        except frappe.DoesNotExistError:
             return None
 
         if match_field != "name" and not meta.has_field(match_field):
@@ -252,24 +263,36 @@ class MpesaC2BPaymentRegister(Document):
         if customer_field != "name" and not meta.has_field(customer_field):
             return None
 
-        return match_field, customer_field
+        return customer_field
 
     def _find_customer_from_billref(self, billrefnumber: str) -> str | None:
         if not billrefnumber:
             return
 
         for doctype, match_field in self._reconciliation_order():
-            usable = self._usable_match(doctype, match_field)
-            if not usable:
+            customer_field = self._usable_match(doctype, match_field)
+            if not customer_field:
                 continue
 
-            match_field, customer_field = usable
             customer = frappe.db.get_value(
                 doctype, self._match_filters(doctype, match_field), customer_field
             )
-            if customer:
+            if customer and self._customer_is_active(customer):
                 self.customer = customer
                 return
+
+    @staticmethod
+    def _customer_is_active(customer: str) -> bool:
+        """A deactivated customer must never be matched from a bill reference.
+
+        A payer can put anything in the account reference, including the name
+        of a customer someone has since disabled. Matching one looks like a
+        successful match right up until the Payment Entry refuses to submit
+        against a disabled party, which leaves the money attributed to an
+        account the business has deliberately closed. Keep walking the priority
+        instead, and let the payment sit as a draft if nothing else matches.
+        """
+        return not frappe.db.get_value("Customer", customer, "disabled")
 
     def _reconcile_payment(self):
         settings = frappe.get_cached_value(
@@ -320,9 +343,11 @@ class MpesaC2BPaymentRegister(Document):
         Returns a tuple (invoice, sales_order), where exactly one is non-None if billrefnumber matched either.
         Otherwise both are None.
 
-        Walks the configured Reconciliation Priority in order. Rows targeting
-        anything we cannot settle a payment against are skipped here; they still
-        count for customer resolution.
+        Walks the configured Reconciliation Priority in order and returns the
+        first Sales Invoice or Sales Order it matches. Rows targeting anything
+        else - a Customer or a Quotation - name the payer but cannot take an
+        allocation, so they are passed over here rather than ending the walk;
+        they still count for customer resolution.
         """
         for doctype, match_field in self._reconciliation_order():
             if not self._usable_match(doctype, match_field):
