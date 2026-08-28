@@ -105,26 +105,7 @@ class MpesaC2BPaymentRegister(Document):
             frappe.throw(_("Mode of Payment is required"))
 
         if self.submit_payment:
-            refs = []
-            invoice, order = self._get_matching_refs()
-
-            if invoice:
-                refs.append(
-                    {
-                        "reference_doctype": "Sales Invoice",
-                        "reference_name": invoice,
-                        "allocated_amount": self.transamount,
-                    }
-                )
-
-            elif order:
-                refs.append(
-                    {
-                        "reference_doctype": "Sales Order",
-                        "reference_name": order,
-                        "allocated_amount": self.transamount,
-                    }
-                )
+            refs = self._allocation_for(*self._get_matching_refs())
 
             payment_entry = create_payment_entry(
                 self.company,
@@ -142,6 +123,67 @@ class MpesaC2BPaymentRegister(Document):
             )
 
             self.payment_entry = payment_entry.name
+
+    def _allocation_for(self, invoice: str | None, order: str | None) -> list[dict]:
+        """Allocate this payment to the matched document, up to what it owes.
+
+        The whole transaction amount used to go on the reference regardless of
+        the balance. Payment Entry refuses an allocation larger than the
+        outstanding amount, and the refusal happens while this record is being
+        submitted - so a customer settling a part-paid invoice, or paying twice
+        against one order, produced no Payment Entry at all. Not even the
+        genuinely unallocated part reached the books; the money went missing
+        behind an entry in the Error Log.
+
+        Cap it instead. Anything above the balance stays unallocated on the
+        Payment Entry, where reconciliation can place it.
+        """
+        if invoice:
+            doctype, reference = "Sales Invoice", invoice
+        elif order:
+            doctype, reference = "Sales Order", order
+        else:
+            return []
+
+        allocated = min(
+            flt(self.transamount), self._reference_outstanding(doctype, reference)
+        )
+        if allocated <= 0:
+            # Settled between the match and here, or an order already paid in
+            # full by an earlier payment. Nothing owing to allocate against.
+            return []
+
+        return [
+            {
+                "reference_doctype": doctype,
+                "reference_name": reference,
+                "allocated_amount": allocated,
+            }
+        ]
+
+    @staticmethod
+    def _reference_outstanding(doctype: str, reference: str) -> float:
+        """What the document still owes, the way ERPNext works it out.
+
+        An invoice carries its own outstanding amount. An order does not - its
+        balance is what has not yet been paid in advance against it.
+        """
+        if doctype == "Sales Invoice":
+            return flt(
+                frappe.db.get_value("Sales Invoice", reference, "outstanding_amount")
+            )
+
+        order = frappe.db.get_value(
+            "Sales Order",
+            reference,
+            ["rounded_total", "grand_total", "advance_paid"],
+            as_dict=True,
+        )
+        if not order:
+            return 0.0
+
+        total = flt(order.rounded_total) or flt(order.grand_total)
+        return total - flt(order.advance_paid)
 
     def on_submit(self):
         if frappe.db.get_global("is_manual_reconciliation") == "1":

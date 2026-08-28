@@ -304,6 +304,77 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         self.assertEqual(first, second)
         self.assertEqual(mock_get_all.call_count, 1)
 
+    # -- allocation ----------------------------------------------------------
+
+    def test_allocation_is_capped_at_what_the_invoice_still_owes(self):
+        """A payment larger than the balance must not be allocated in full.
+
+        Payment Entry throws on an over-allocation, and that throw happens
+        while this record is being submitted - so the whole payment, not just
+        the surplus, would fail to reach the books.
+        """
+        doc = self._register(transamount=15120)
+
+        with patch("frappe.db.get_value", return_value=2000) as mock_get_value:
+            refs = doc._allocation_for("SINV-0001", None)
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0]["allocated_amount"], 2000)
+        self.assertEqual(refs[0]["reference_doctype"], "Sales Invoice")
+        self.assertEqual(mock_get_value.call_args.args[2], "outstanding_amount")
+
+    def test_the_whole_payment_is_allocated_when_it_fits(self):
+        doc = self._register(transamount=1500)
+
+        with patch("frappe.db.get_value", return_value=2000):
+            refs = doc._allocation_for("SINV-0001", None)
+
+        self.assertEqual(refs[0]["allocated_amount"], 1500)
+
+    def test_an_order_owes_what_has_not_been_advanced_against_it(self):
+        doc = self._register(transamount=15120)
+        order = frappe._dict(rounded_total=0, grand_total=10000, advance_paid=4000)
+
+        with patch("frappe.db.get_value", return_value=order):
+            refs = doc._allocation_for(None, "SAL-ORD-0001")
+
+        self.assertEqual(refs[0]["reference_doctype"], "Sales Order")
+        self.assertEqual(refs[0]["allocated_amount"], 6000)
+
+    def test_a_settled_order_takes_no_allocation(self):
+        """Paid in full by an earlier payment: there is nothing owing."""
+        doc = self._register(transamount=15120)
+        order = frappe._dict(rounded_total=0, grand_total=10000, advance_paid=10000)
+
+        with patch("frappe.db.get_value", return_value=order):
+            self.assertEqual(doc._allocation_for(None, "SAL-ORD-0001"), [])
+
+    def test_a_settled_invoice_takes_no_allocation(self):
+        doc = self._register(transamount=15120)
+
+        with patch("frappe.db.get_value", return_value=0):
+            self.assertEqual(doc._allocation_for("SINV-0001", None), [])
+
+    def test_nothing_matched_allocates_nothing(self):
+        """The payment still becomes a Payment Entry, fully unallocated."""
+        doc = self._register(transamount=15120)
+
+        self.assertEqual(doc._allocation_for(None, None), [])
+
+    def test_a_reference_that_vanished_takes_no_allocation(self):
+        doc = self._register(transamount=15120)
+
+        with patch("frappe.db.get_value", return_value=None):
+            self.assertEqual(doc._allocation_for(None, "SAL-ORD-GONE"), [])
+
+    def test_an_invoice_wins_over_an_order(self):
+        doc = self._register(transamount=1000)
+
+        with patch("frappe.db.get_value", return_value=5000):
+            refs = doc._allocation_for("SINV-0001", "SAL-ORD-0001")
+
+        self.assertEqual(refs[0]["reference_name"], "SINV-0001")
+
     def test_matching_refs_follow_the_configured_order(self):
         """Sales Order first means an order wins even when an invoice matches."""
         doc = self._register(customer="CUST-0001")
