@@ -1,5 +1,6 @@
 from unittest.mock import Mock, patch
 
+import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from .m_pesa_api import (
@@ -84,7 +85,9 @@ class TestMPesaAPI(FrappeTestCase):
         return mock_process.call_args.kwargs["payload"]
 
     @patch("frappe.get_doc")
-    @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url")
+    @patch(
+        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url"
+    )
     @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.process_request")
     def test_stk_push_account_reference_never_null(
         self, mock_process, mock_callback, mock_get_doc
@@ -114,7 +117,9 @@ class TestMPesaAPI(FrappeTestCase):
         self.assertEqual(payload["TransactionDesc"], "MEXP-26-08-000004")
 
     @patch("frappe.get_doc")
-    @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url")
+    @patch(
+        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url"
+    )
     @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.process_request")
     def test_stk_push_reference_name_wins_over_document_name(
         self, mock_process, mock_callback, mock_get_doc
@@ -133,7 +138,9 @@ class TestMPesaAPI(FrappeTestCase):
         self.assertEqual(payload["AccountReference"], "SINV-00042")
 
     @patch("frappe.get_doc")
-    @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url")
+    @patch(
+        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url"
+    )
     @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.process_request")
     def test_stk_push_prefers_caller_supplied_account_reference(
         self, mock_process, mock_callback, mock_get_doc
@@ -161,7 +168,9 @@ class TestMPesaAPI(FrappeTestCase):
         self.assertEqual(payload["TransactionDesc"], "ACC-2026-001")
 
     @patch("frappe.get_doc")
-    @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url")
+    @patch(
+        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.build_callback_url"
+    )
     @patch("frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.process_request")
     def test_stk_push_falls_back_when_nothing_identifies_the_push(
         self, mock_process, mock_callback, mock_get_doc
@@ -183,7 +192,7 @@ class TestMPesaAPI(FrappeTestCase):
 
     @patch("frappe.get_all")
     def test_get_mpesa_mode_of_payment(self, mock_get_all):
-        mock_get_all.return_value = [{"mode_of_payment": "Cash"}]
+        mock_get_all.return_value = [frappe._dict(mode_of_payment="Cash")]
 
         company = "Test Company"
 
@@ -206,15 +215,25 @@ class TestMPesaAPI(FrappeTestCase):
         self.assertEqual(payments[0]["name"], "MP001")
         self.assertEqual(payments[0]["amount"], 100.0)
 
+    @patch(
+        "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.process_mpesa_payment"
+    )
     @patch("frappe.get_doc")
-    @patch("frappe.get_all")
-    def test_submit_mpesa_payment(self, mock_get_all, mock_get_doc):
-        mock_get_all.return_value = [{"name": "MP001"}]
-        mock_get_doc.return_value = Mock(payment_entry="PE001")
+    def test_submit_mpesa_payment(self, mock_get_doc, mock_process):
+        """It hands back the Payment Entry the register produced.
 
-        mpesa_payment = "MP001"
-        customer = "Test Customer"
+        Mocking frappe.get_doc alone was not enough: process_mpesa_payment
+        went on to query the register by a Mock attribute, which reached the
+        database as SQL and failed there.
+        """
+        mock_process.return_value = frappe._dict(payment_entry="PE001")
+        payment_entry = Mock()
+        mock_get_doc.return_value = payment_entry
 
-        payment_entry = submit_mpesa_payment(mpesa_payment, customer)
+        result = submit_mpesa_payment("MP001", "Test Customer")
 
-        self.assertEqual(payment_entry, "PE001")
+        self.assertIs(result, payment_entry)
+        mock_process.assert_called_once_with(
+            "MP001", "Test Customer", submit_payment=True
+        )
+        mock_get_doc.assert_called_once_with("Payment Entry", "PE001")

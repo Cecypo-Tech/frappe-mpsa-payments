@@ -1,3 +1,4 @@
+import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from .payment_entry import (
@@ -7,62 +8,69 @@ from .payment_entry import (
     set_paid_amount_and_received_amount,
 )
 
+test_dependencies = ["Company", "Customer"]
+
+#: ERPNext's own test company, so the party account these queries need exists.
+COMPANY = "Wind Power LLC"
+CUSTOMER = "_Test Mpesa Customer"
+
 
 class TestPaymentFunctions(FrappeTestCase):
+    """These called into ERPNext with a company and customer that never
+    existed, so the queries returned an empty list without ever running -
+    and get_outstanding_invoices, once it started resolving a party account,
+    failed outright on the missing record."""
+
+    def setUp(self):
+        frappe.set_user("Administrator")
+
+        if not frappe.db.exists("Customer", CUSTOMER):
+            customer = frappe.new_doc("Customer")
+            customer.customer_name = CUSTOMER
+            customer.flags.name_set = True
+            customer.name = CUSTOMER
+            customer.insert(ignore_permissions=True)
+
     def test_get_outstanding_invoices(self):
-        # Signature is (company, customer, invoice_type=...); the currency and
-        # POS profile arguments this used to pass belong to a version of it
-        # that no longer exists.
-        company = "Test Company Maniac"
-        customer = "Test Customer"
+        invoices = get_outstanding_invoices(COMPANY, CUSTOMER)
 
-        invoices = get_outstanding_invoices(company, customer)
-
-        # Assert the result
-        self.assertTrue(isinstance(invoices, list))
+        self.assertIsInstance(invoices, list)
 
     def test_get_unallocated_payments(self):
-        customer = "Test Customer"
-        company = "Test Company Maniac"
-        currency = "KES"
-        mode_of_payment = "Cash"
-
-        # Call the function
         unallocated_payments = get_unallocated_payments(
-            customer, company, currency, mode_of_payment
+            CUSTOMER, COMPANY, "USD", "Cash"
         )
 
-        # Assert the result
-        self.assertTrue(isinstance(unallocated_payments, list))
+        self.assertIsInstance(unallocated_payments, list)
 
     def test_get_available_pos_profiles(self):
-        company = "Test Company Maniac"
-        currency = "KES"
+        pos_profiles = get_available_pos_profiles(COMPANY, "USD")
 
-        pos_profiles = get_available_pos_profiles(company, currency)
-
-        self.assertTrue(isinstance(pos_profiles, list))
+        self.assertIsInstance(pos_profiles, list)
 
     def test_set_paid_amount_and_received_amount(self):
-        party_account_currency = "KES"
-        bank = {
-            "account_currency": "KES",
-            "bank_currency": "KES",
-            "conversion_rate": 1.0,
-        }
-        outstanding_amount = 100.00
-        payment_type = "Receive"
-        bank_amount = None
-        conversion_rate = 1.0
-
         paid_amount, received_amount = set_paid_amount_and_received_amount(
-            party_account_currency,
-            bank,
-            outstanding_amount,
-            payment_type,
-            bank_amount,
-            conversion_rate,
+            "KES",
+            {"account_currency": "KES", "bank_currency": "KES", "conversion_rate": 1.0},
+            100.00,
+            "Receive",
+            None,
+            1.0,
         )
 
         self.assertEqual(paid_amount, 100.00)
         self.assertEqual(received_amount, 100.00)
+
+    def test_a_payment_in_another_currency_is_converted(self):
+        """The bank amount decides what was received when the currencies differ."""
+        paid_amount, received_amount = set_paid_amount_and_received_amount(
+            "USD",
+            {"account_currency": "KES", "bank_currency": "KES", "conversion_rate": 1.0},
+            100.00,
+            "Receive",
+            None,
+            130.0,
+        )
+
+        self.assertEqual(paid_amount, 100.00)
+        self.assertEqual(received_amount, 13000.0)

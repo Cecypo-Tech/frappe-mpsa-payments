@@ -6,9 +6,9 @@ from __future__ import unicode_literals
 import frappe
 import requests
 from frappe.model.document import Document
-from frappe.utils import get_request_site_address
 
 from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import get_token
+from frappe_mpsa_payments.utils.utils import site_address
 
 
 class MpesaC2BPaymentRegisterURL(Document):
@@ -33,7 +33,7 @@ class MpesaC2BPaymentRegisterURL(Document):
             base_url=base_url,
         )
 
-        site_url = get_request_site_address(True)
+        site_url = site_address()
         validation_url = (
             # site_url + "/api/method/payments.payment_gateways.doctype.mpesa_c2b_payment_register_url.mpesa_api.validation"
             site_url
@@ -67,15 +67,14 @@ class MpesaC2BPaymentRegisterURL(Document):
                 self.register_status = "Failed"
                 frappe.msgprint(str(res))
         except requests.exceptions.HTTPError as errh:
-            # Handle HTTP errors
-            # frappe.msgprint(f"HTTP Error: {errh}")
+            self.register_status = "Failed"
             frappe.msgprint(f"Response Content: {errh.response.content}")
         except requests.exceptions.ConnectionError as errc:
-            # Handle Connection errors
+            self.register_status = "Failed"
             frappe.msgprint(f"Error Connecting: {errc}")
         except requests.exceptions.Timeout as errt:
-            # Handle Timeout errors
+            self.register_status = "Failed"
             frappe.msgprint(f"Timeout Error: {errt}")
         except requests.exceptions.RequestException as err:
-            # Handle other exceptions
+            self.register_status = "Failed"
             frappe.msgprint(f"Request Exception: {err}")

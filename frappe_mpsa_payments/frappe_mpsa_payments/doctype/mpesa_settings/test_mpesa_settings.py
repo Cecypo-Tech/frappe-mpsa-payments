@@ -1,10 +1,10 @@
 # Copyright (c) 2020, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
 
-import unittest
 from json import dumps
 
 import frappe
+from frappe.tests.utils import FrappeTestCase
 from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import verify_transaction
 from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
     create_mode_of_payment,
@@ -12,25 +12,48 @@ from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_sett
 )
 
 
-class TestMpesaSettings(unittest.TestCase):
+# The setUp below leans on ERPNext's own test records - Wind Power LLC and its
+# accounts - which the runner only creates for doctypes a module declares.
+test_dependencies = ["Company", "Item", "Customer", "POS Profile"]
+
+#: ERPNext's own test company, which owns the accounts these tests post to.
+POS_COMPANY = "Wind Power LLC"
+
+
+class TestMpesaSettings(FrappeTestCase):
     def setUp(self):
+        # The runner does not guarantee a user, and these tests write
+        # accounting documents.
+        frappe.set_user("Administrator")
+
         from erpnext.accounts.doctype.payment_entry.test_payment_entry import (
             create_customer,
+        )
+        from erpnext.accounts.doctype.pos_opening_entry.test_pos_opening_entry import (
+            create_opening_entry,
         )
         from erpnext.accounts.doctype.pos_profile.test_pos_profile import (
             make_pos_profile,
         )
         from erpnext.stock.doctype.item.test_item import make_item
 
+        # Integration Request rows are committed outside the test transaction
+        # by handle_success, so a previous run leaves one behind and the next
+        # skips creating it - and then asserts against stale data.
+        for stale in frappe.get_all(
+            "Integration Request", filters={"integration_request_service": "Mpesa"}
+        ):
+            frappe.delete_doc("Integration Request", stale.name, force=1)
+
         # create payment gateway in setup
         create_mpesa_settings(payment_gateway_name="_Test")
         create_mpesa_settings(payment_gateway_name="_Account Balance")
-        create_mpesa_settings(payment_gateway_name="Payment")
+        create_mpesa_settings(payment_gateway_name="Payment", company=POS_COMPANY)
 
         self.customer = create_customer("_Test Customer", "USD")
         self.item = make_item(properties={"is_stock_item": 1}).name
-        self.pos_profile = make_pos_profile(
-            company="Wind Power LLC",
+        pos_profile = make_pos_profile(
+            company=POS_COMPANY,
             cost_center="Main - WP",
             currency="USD",
             expense_account="Cost of Goods Sold - WP",
@@ -40,12 +63,26 @@ class TestMpesaSettings(unittest.TestCase):
             warehouse="Stores - WP",
             write_off_account="Write Off - WP",
             write_off_cost_center="Main - WP",
-        ).name
+        )
+        self.pos_profile = pos_profile.name
 
-    def tearDown(self):
-        frappe.db.sql("delete from `tabMpesa Settings`")
-        frappe.db.sql(
-            "delete from `tabIntegration Request` where integration_request_service = 'Mpesa'"
+        # These tests are about POS Invoice payments, so POS has to be in POS
+        # Invoice mode - a site switched to Sales Invoice mode refuses them.
+        frappe.db.set_single_value("POS Settings", "invoice_type", "POS Invoice")
+
+        # A POS Invoice will not submit against a profile with no open shift.
+        # The shift is opened for a cashier of this suite's own, because a
+        # user may hold only one open shift at a time and Administrator often
+        # already has one on a site that has seen real use.
+        if not frappe.db.exists(
+            "POS Opening Entry", {"pos_profile": pos_profile.name, "status": "Open"}
+        ):
+            create_opening_entry(pos_profile, _test_cashier())
+
+        self.mpesa_account = _ensure_mode_of_payment_account(
+            "Mpesa-Payment",
+            POS_COMPANY,
+            _ensure_gateway_account("Mpesa-Payment", POS_COMPANY),
         )
 
     def test_creation_of_payment_gateway(self):
@@ -95,11 +132,7 @@ class TestMpesaSettings(unittest.TestCase):
             create_pos_invoice,
         )
 
-        mpesa_account = frappe.db.get_value(
-            "Payment Gateway Account",
-            {"payment_gateway": "Mpesa-Payment"},
-            "payment_account",
-        )
+        mpesa_account = self.mpesa_account
         frappe.db.set_value("Account", mpesa_account, "account_currency", "KES")
         frappe.db.set_value("Customer", "_Test Customer", "default_currency", "KES")
         pos_invoice = create_pos_invoice(
@@ -108,7 +141,7 @@ class TestMpesaSettings(unittest.TestCase):
             debit_to="Debtors - WP",
             warehouse="Stores - WP",
             cost_center="Main - WP",
-            company="Wind Power LLC",
+            company=POS_COMPANY,
             income_account="Sales - WP",
             pos_profile=self.pos_profile,
             account_for_change_amount="Cash - WP",
@@ -171,11 +204,7 @@ class TestMpesaSettings(unittest.TestCase):
             create_pos_invoice,
         )
 
-        mpesa_account = frappe.db.get_value(
-            "Payment Gateway Account",
-            {"payment_gateway": "Mpesa-Payment"},
-            "payment_account",
-        )
+        mpesa_account = self.mpesa_account
         frappe.db.set_value("Account", mpesa_account, "account_currency", "KES")
         frappe.db.set_value("Mpesa Settings", "Payment", "transaction_limit", "500")
         frappe.db.set_value("Customer", "_Test Customer", "default_currency", "KES")
@@ -186,7 +215,7 @@ class TestMpesaSettings(unittest.TestCase):
             debit_to="Debtors - WP",
             warehouse="Stores - WP",
             cost_center="Main - WP",
-            company="Wind Power LLC",
+            company=POS_COMPANY,
             income_account="Sales - WP",
             pos_profile=self.pos_profile,
             account_for_change_amount="Cash - WP",
@@ -277,9 +306,12 @@ class TestMpesaSettings(unittest.TestCase):
         )
 
         mock_response = MagicMock()
+        # The register endpoint answers with spaced keys and a 1000 status,
+        # which is what register_pull_transaction reads. The old ResponseCode
+        # payload below never matched, so a success looked like a failure.
         mock_response.json.return_value = {
-            "ResponseCode": "0",
-            "ResponseDescription": "Accept the service request successfully.",
+            "Response Status": "1000",
+            "Response Description": "Accept the service request successfully.",
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -471,11 +503,7 @@ class TestMpesaSettings(unittest.TestCase):
             create_pos_invoice,
         )
 
-        mpesa_account = frappe.db.get_value(
-            "Payment Gateway Account",
-            {"payment_gateway": "Mpesa-Payment"},
-            "payment_account",
-        )
+        mpesa_account = self.mpesa_account
         frappe.db.set_value("Account", mpesa_account, "account_currency", "KES")
         frappe.db.set_value("Mpesa Settings", "Payment", "transaction_limit", "500")
         frappe.db.set_value("Customer", "_Test Customer", "default_currency", "KES")
@@ -486,7 +514,7 @@ class TestMpesaSettings(unittest.TestCase):
             debit_to="Debtors - WP",
             warehouse="Stores - WP",
             cost_center="Main - WP",
-            company="Wind Power LLC",
+            company=POS_COMPANY,
             income_account="Sales - WP",
             pos_profile=self.pos_profile,
             account_for_change_amount="Cash - WP",
@@ -563,24 +591,119 @@ class TestMpesaSettings(unittest.TestCase):
         pos_invoice.delete()
 
 
-def create_mpesa_settings(payment_gateway_name="Express"):
+def create_mpesa_settings(payment_gateway_name="Express", company=None):
+    """The company decides where the gateway account and mode of payment land.
+
+    on_update passes self.company straight to create_payment_gateway_account,
+    so a settings document with none falls back to whatever the site's default
+    company happens to be - which is not the company these tests post to.
+    """
     if frappe.db.exists("Mpesa Settings", payment_gateway_name):
-        return frappe.get_doc("Mpesa Settings", payment_gateway_name)
+        doc = frappe.get_doc("Mpesa Settings", payment_gateway_name)
+        if company and doc.company != company:
+            doc.company = company
+            doc.save(ignore_permissions=True)
+        return doc
 
     doc = frappe.get_doc(
         dict(  # nosec
             doctype="Mpesa Settings",
             sandbox=1,
             payment_gateway_name=payment_gateway_name,
+            company=company,
             consumer_key="5sMu9LVI1oS3oBGPJfh3JyvLHwZOdTKn",
             consumer_secret="VI1oS3oBGPJfh3JyvLHw",
             online_passkey="LVI1oS3oBGPJfh3JyvLHwZOd",
+            # api_type and paybill_type are mandatory. Without them this only
+            # ever worked on a site where the settings already existed, and
+            # inserting one on a fresh site - CI - threw MandatoryError.
+            api_type="MPesa Express",
+            paybill_type="Buy Goods",
             till_number="174379",
         )
     )
 
     doc.insert(ignore_permissions=True)
     return doc
+
+
+def _ensure_gateway_account(gateway: str, company: str) -> str:
+    """A KES receipts account for this gateway, in this company.
+
+    create_payment_gateway_account bails out as soon as *any* gateway account
+    exists in the same currency, whatever company it belongs to, so a second
+    company never gets one of its own.
+    """
+    from erpnext.setup.setup_wizard.operations.install_fixtures import (
+        create_bank_account,
+    )
+
+    account = frappe.db.get_value(
+        "Account", {"account_name": gateway, "company": company}, "name"
+    )
+    if not account:
+        create_bank_account({"company_name": company, "bank_account": gateway})
+        account = frappe.db.get_value(
+            "Account", {"account_name": gateway, "company": company}, "name"
+        )
+
+    frappe.db.set_value("Account", account, "account_currency", "KES")
+
+    existing = frappe.db.get_value(
+        "Payment Gateway Account",
+        {"payment_gateway": gateway, "company": company},
+        "name",
+    )
+    doc = (
+        frappe.get_doc("Payment Gateway Account", existing)
+        if existing
+        else frappe.new_doc("Payment Gateway Account")
+    )
+    doc.update(
+        {
+            "payment_gateway": gateway,
+            "payment_account": account,
+            "currency": "KES",
+            "company": company,
+            # The Payment Request takes its channel from here, and only a
+            # Phone request reaches the STK push.
+            "payment_channel": "Phone",
+            "is_default": 0,
+        }
+    )
+    doc.save(ignore_permissions=True)
+
+    return account
+
+
+def _ensure_mode_of_payment_account(
+    mode_of_payment: str, company: str, account: str
+) -> str:
+    """Give the mode of payment a default account in this company.
+
+    create_mode_of_payment only builds the accounts row when it creates the
+    mode of payment. One that already exists - because another company's
+    gateway was set up first - never gains a row for this company, and a POS
+    Invoice paid through it is then refused for having no default account.
+    """
+    doc = frappe.get_doc("Mode of Payment", mode_of_payment)
+    if not any(row.company == company for row in doc.accounts):
+        doc.append("accounts", {"company": company, "default_account": account})
+        doc.save(ignore_permissions=True)
+
+    return account
+
+
+def _test_cashier() -> str:
+    """A user that exists only to hold this suite's open POS shift."""
+    email = "mpesa-test-cashier@example.com"
+    if not frappe.db.exists("User", email):
+        user = frappe.new_doc("User")
+        user.email = email
+        user.first_name = "Mpesa Test Cashier"
+        user.send_welcome_email = 0
+        user.insert(ignore_permissions=True)
+    return email
 
 
 def get_test_account_balance_response():

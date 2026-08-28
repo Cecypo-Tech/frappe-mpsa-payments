@@ -209,7 +209,24 @@ class MpesaSettings(Document):
             if frappe.flags.in_test:
                 from .test_mpesa_settings import get_payment_request_response_payload
 
-                _response = frappe._dict(get_payment_request_response_payload(amount))
+                # As with the balance query, the simulated response was built
+                # and dropped, so no Integration Request existed for the
+                # callback to find and verify_transaction had nothing to
+                # settle against. Log it keyed by the checkout id, carrying
+                # the reference the callback writes the receipt back onto.
+                response = frappe._dict(get_payment_request_response_payload(amount))
+                self.handle_api_response(
+                    "CheckoutRequestID",
+                    frappe._dict(
+                        {
+                            "reference_doctype": args.get("reference_doctype"),
+                            "reference_docname": args.get("reference_docname"),
+                            "request_amount": amount,
+                            "phone_number": phone_number,
+                        }
+                    ),
+                    response,
+                )
             else:
                 stk_request = frappe.new_doc(MPESA_EXPRESS_REQUEST_DOCTYPE)
                 stk_request.update(
@@ -255,7 +272,26 @@ class MpesaSettings(Document):
         if frappe.flags.in_test:
             from .test_mpesa_settings import get_test_account_balance_response
 
-            frappe._dict(get_test_account_balance_response())
+            # The simulated response was being built and thrown away, so the
+            # Integration Request the live path logs never existed under test
+            # and the callback had nothing to update. Register it the same way
+            # process_request would, keyed by the conversation id.
+            response = frappe._dict(get_test_account_balance_response())
+            self.handle_api_response(
+                "ConversationID",
+                frappe._dict(
+                    {
+                        # The callback reads the reference back out of the
+                        # logged request to know which settings to write the
+                        # balance onto, so log it the way the connector does.
+                        "reference_doctype": self.doctype,
+                        "reference_docname": self.name,
+                        "CommandID": "AccountBalance",
+                        "PartyA": self.business_shortcode,
+                    }
+                ),
+                response,
+            )
         else:
             get_account_balance(self.name)
 

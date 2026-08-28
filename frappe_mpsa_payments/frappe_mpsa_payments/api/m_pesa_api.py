@@ -420,7 +420,6 @@ def stk_push_callback(**kwargs) -> None:
             message=realtime_payload,
         )
 
-
         integration_req = frappe.get_doc(
             "Integration Request", {"output": ["like", f"%{checkout_request_id}%"]}
         )
@@ -494,6 +493,14 @@ def confirmation(**kwargs):
     try:
         args = frappe._dict(kwargs)
 
+        # flt() quietly turns anything it cannot read into 0.0, which used to
+        # queue a zero-amount payment that then refused to submit and sat in
+        # the register as a draft nobody was looking for. Reject the callback
+        # instead - Safaricom retries a rejection.
+        amount = flt(args.get("TransAmount"))
+        if amount <= 0:
+            raise ValueError(f"Unusable TransAmount: {args.get('TransAmount')!r}")
+
         frappe.set_user("Administrator")
 
         frappe.enqueue(
@@ -505,7 +512,7 @@ def confirmation(**kwargs):
                 "transactiontype": args.get("TransactionType"),
                 "transid": args.get("TransID"),
                 "transtime": args.get("TransTime"),
-                "transamount": flt(args.get("TransAmount")),
+                "transamount": amount,
                 "businessshortcode": args.get("BusinessShortCode"),
                 "billrefnumber": args.get("BillRefNumber"),
                 "invoicenumber": args.get("InvoiceNumber"),
