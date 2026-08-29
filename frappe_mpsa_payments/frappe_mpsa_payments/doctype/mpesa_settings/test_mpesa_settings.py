@@ -5,12 +5,12 @@ from json import dumps
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+
 from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import verify_transaction
 from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
     create_mode_of_payment,
     process_balance_info,
 )
-
 
 # The setUp below leans on ERPNext's own test records - Wind Power LLC and its
 # accounts - which the runner only creates for doctypes a module declares.
@@ -74,9 +74,28 @@ class TestMpesaSettings(FrappeTestCase):
         # The shift is opened for a cashier of this suite's own, because a
         # user may hold only one open shift at a time and Administrator often
         # already has one on a site that has seen real use.
-        if not frappe.db.exists(
-            "POS Opening Entry", {"pos_profile": pos_profile.name, "status": "Open"}
+        #
+        # Reusing any open shift is not enough. Sales Invoice's
+        # validate_pos_opening_entry demands one whose period_start_date is
+        # *today*, and throws outright if the profile has more than one open at
+        # once. A shift committed by an earlier run therefore goes stale at
+        # midnight and takes the whole suite red with it. Retire whatever is
+        # lying around, then open today's.
+        today = frappe.utils.today()
+        shift_for_today = None
+        for entry in frappe.get_all(
+            "POS Opening Entry",
+            filters={"pos_profile": pos_profile.name, "status": "Open"},
+            fields=["name", "period_start_date"],
         ):
+            if shift_for_today is None and (
+                frappe.utils.get_date_str(entry.period_start_date) == today
+            ):
+                shift_for_today = entry.name
+            else:
+                frappe.db.set_value("POS Opening Entry", entry.name, "status", "Closed")
+
+        if not shift_for_today:
             create_opening_entry(pos_profile, _test_cashier())
 
         self.mpesa_account = _ensure_mode_of_payment_account(

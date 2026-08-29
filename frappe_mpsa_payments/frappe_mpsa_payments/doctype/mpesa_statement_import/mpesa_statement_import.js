@@ -32,12 +32,12 @@ function show_result_indicator(frm) {
 			frm.doc.blocked_count || 0,
 			failed,
 		]),
-		failed ? "red" : created ? "green" : "orange",
+		failed ? "red" : created ? "green" : "orange"
 	);
 
 	frm.page.set_indicator(
 		__("{0} Created", [created]),
-		failed ? "red" : created ? "green" : "orange",
+		failed ? "red" : created ? "green" : "orange"
 	);
 }
 
