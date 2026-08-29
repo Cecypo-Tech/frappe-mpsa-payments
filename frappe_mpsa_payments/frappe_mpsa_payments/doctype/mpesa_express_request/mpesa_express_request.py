@@ -3,15 +3,17 @@
 
 
 import frappe
+from frappe.exceptions import DoesNotExistError
 from frappe.model.document import Document
-from frappe_mpsa_payments.utils.doctype_names import MPESA_SETTINGS_DOCTYPE
 from frappe.rate_limiter import rate_limit
 from frappe.utils import time
-from frappe.exceptions import DoesNotExistError
+
+from frappe_mpsa_payments.utils.doctype_names import MPESA_SETTINGS_DOCTYPE
+
 from ....utils.utils import (
+    convert_amount_to_kes,
     handle_successful_transaction,
     validate_phone_number,
-    convert_amount_to_kes,
 )
 from ...api.m_pesa_api import (
     check_transaction_status,
@@ -20,7 +22,6 @@ from ...api.m_pesa_api import (
 
 
 class MpesaExpressRequest(Document):
-
     def set_missing_values(self):
         if not self.request_id:
             self.request_id = f"MPESAEXP{frappe.generate_hash(length=32)}"

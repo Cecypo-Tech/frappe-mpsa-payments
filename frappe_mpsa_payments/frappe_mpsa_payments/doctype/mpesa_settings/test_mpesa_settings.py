@@ -5,12 +5,12 @@ from json import dumps
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+
 from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import verify_transaction
 from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
     create_mode_of_payment,
     process_balance_info,
 )
-
 
 # The setUp below leans on ERPNext's own test records - Wind Power LLC and its
 # accounts - which the runner only creates for doctypes a module declares.
