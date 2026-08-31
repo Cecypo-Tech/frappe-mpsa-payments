@@ -223,15 +223,34 @@ class TestConnectorTimeouts(unittest.TestCase):
         c._set_timeout((5, 45))
         self.assertEqual(c._timeout, (5, 45))
 
-    def test_every_outgoing_request_is_bounded(self):
-        """Including authenticate() - it used to have no timeout at all."""
-        import inspect
+    def test_every_outgoing_request_in_the_app_is_bounded(self):
+        """A request with no timeout can hang a worker forever.
 
-        src = inspect.getsource(connectors)
-        call_sites = re.findall(r"requests\.(?:get|post|put|patch)\(", src)
-        self.assertTrue(call_sites, "expected to find outgoing requests")
+        Several used to: connectors.authenticate, m_pesa_api.get_token, the C2B
+        register URL call and four in mpesa_connector. This walks the whole app
+        rather than one module, so a new unbounded call anywhere fails here.
+        """
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parents[3]
+        unbounded = []
+
+        for path in sorted(root.rglob("*.py")):
+            src = path.read_text()
+            for match in re.finditer(r"(?:_?requests)\.(?:get|post|put|patch)\(", src):
+                start = src.index("(", match.end() - 1)
+                depth = 0
+                for end in range(start, len(src)):
+                    if src[end] == "(":
+                        depth += 1
+                    elif src[end] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                if "timeout" not in src[start:end]:
+                    line = src[: match.start()].count("\n") + 1
+                    unbounded.append(f"{path.relative_to(root)}:{line}")
+
         self.assertEqual(
-            src.count("timeout=self._timeout"),
-            len(call_sites),
-            "a requests call is missing timeout=self._timeout",
+            unbounded, [], f"requests call(s) with no timeout: {unbounded}"
         )

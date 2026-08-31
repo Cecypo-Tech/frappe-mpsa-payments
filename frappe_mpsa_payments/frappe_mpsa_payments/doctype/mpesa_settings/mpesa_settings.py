@@ -25,6 +25,9 @@ from frappe.utils import (
 )
 from frappe.utils.file_manager import get_file_path
 
+from frappe_mpsa_payments.frappe_mpsa_payments.connectors.connectors import (
+    DEFAULT_TIMEOUT,
+)
 from frappe_mpsa_payments.utils.encoding_initiator_password import (
     generate_security_credential,
 )
@@ -770,7 +773,7 @@ def register_pull_transaction(
             f"{base_url}/pulltransactions/v1/register",
             headers=headers,
             json=payload,
-            timeout=30,
+            timeout=DEFAULT_TIMEOUT,
         )
         resp.raise_for_status()
         data = resp.json()

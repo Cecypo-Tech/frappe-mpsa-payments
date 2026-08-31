@@ -6,6 +6,10 @@ import requests
 from frappe.utils import get_url
 from requests.auth import HTTPBasicAuth
 
+from frappe_mpsa_payments.frappe_mpsa_payments.connectors.connectors import (
+    DEFAULT_TIMEOUT,
+)
+
 
 class MpesaConnector:
     def __init__(
@@ -40,7 +44,9 @@ class MpesaConnector:
         authenticate_uri = "/oauth/v1/generate?grant_type=client_credentials"
         authenticate_url = f"{self.base_url}{authenticate_uri}"
         r = requests.get(
-            authenticate_url, auth=HTTPBasicAuth(self.app_key, self.app_secret)
+            authenticate_url,
+            auth=HTTPBasicAuth(self.app_key, self.app_secret),
+            timeout=DEFAULT_TIMEOUT,
         )
         self.authentication_token = r.json()["access_token"]
         return r.json()["access_token"]
@@ -91,7 +97,9 @@ class MpesaConnector:
             "Content-Type": "application/json",
         }
         saf_url = "{}{}".format(self.base_url, "/mpesa/accountbalance/v1/query")
-        r = requests.post(saf_url, headers=headers, json=payload)
+        r = requests.post(
+            saf_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT
+        )
         return r.json()
 
     def stk_push(
@@ -163,7 +171,9 @@ class MpesaConnector:
         }
 
         saf_url = "{}{}".format(self.base_url, "/mpesa/stkpush/v1/processrequest")
-        r = requests.post(saf_url, headers=headers, json=payload)
+        r = requests.post(
+            saf_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT
+        )
         return r.json()
 
     def transaction_status(
@@ -220,7 +230,9 @@ class MpesaConnector:
             "Content-Type": "application/json",
         }
         saf_url = "{}{}".format(self.base_url, "/mpesa/transactionstatus/v1/query")
-        r = requests.post(saf_url, headers=headers, json=payload)
+        r = requests.post(
+            saf_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT
+        )
         return r.json()
 
     def get_payment_url(self, **kwargs):

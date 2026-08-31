@@ -13,6 +13,10 @@ from frappe.model.document import Document
 from frappe.utils import flt
 from requests.auth import HTTPBasicAuth
 
+from frappe_mpsa_payments.frappe_mpsa_payments.connectors.connectors import (
+    DEFAULT_TIMEOUT,
+)
+
 from ...utils.doctype_names import MPESA_EXPRESS_REQUEST_DOCTYPE, MPESA_SETTINGS_DOCTYPE
 from ...utils.encoding_initiator_password import (
     generate_security_credential,
@@ -483,7 +487,11 @@ def get_token(app_key, app_secret, base_url):
     authenticate_uri = "/oauth/v1/generate?grant_type=client_credentials"
     authenticate_url = "{0}{1}".format(base_url, authenticate_uri)
 
-    r = requests.get(authenticate_url, auth=HTTPBasicAuth(app_key, app_secret))
+    r = requests.get(
+        authenticate_url,
+        auth=HTTPBasicAuth(app_key, app_secret),
+        timeout=DEFAULT_TIMEOUT,
+    )
 
     return r.json()["access_token"]
 

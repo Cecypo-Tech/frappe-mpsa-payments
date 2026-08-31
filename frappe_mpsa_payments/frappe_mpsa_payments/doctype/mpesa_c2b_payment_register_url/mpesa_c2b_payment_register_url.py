@@ -8,6 +8,9 @@ import requests
 from frappe.model.document import Document
 
 from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import get_token
+from frappe_mpsa_payments.frappe_mpsa_payments.connectors.connectors import (
+    DEFAULT_TIMEOUT,
+)
 from frappe_mpsa_payments.utils.utils import site_address
 
 
@@ -58,7 +61,12 @@ class MpesaC2BPaymentRegisterURL(Document):
         }
 
         try:
-            r = requests.post(register_url, headers=headers, json=payload)
+            r = requests.post(
+                register_url,
+                headers=headers,
+                json=payload,
+                timeout=DEFAULT_TIMEOUT,
+            )
             r.raise_for_status()  # Raise an HTTPError for bad responses
             res = r.json()
             if res.get("ResponseDescription") == "Success":
