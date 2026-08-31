@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import frappe
+import requests
 
 from frappe_mpsa_payments.frappe_mpsa_payments.api import m_pesa_api as api
 from frappe_mpsa_payments.frappe_mpsa_payments.api import (
@@ -137,3 +138,63 @@ class TestPullPagination(unittest.TestCase):
 
     def test_runaway_total_pages_is_capped(self):
         self.assertEqual(len(self._walk(9999)), api.PULL_MAX_PAGES)
+
+
+class TestBulkPullCircuitBreaker(unittest.TestCase):
+    """When Safaricom is unreachable, stop rather than spend the hour on it."""
+
+    def _bulk(self, outcomes):
+        """Run a bulk pull where each shortcode fails/succeeds per `outcomes`.
+
+        `outcomes` maps position -> "network", "other" or None (success).
+        Returns the shortcodes actually attempted.
+        """
+        names = [f"SC{i}" for i in range(len(outcomes))]
+        attempted = []
+
+        def fake_pull(mpesa_settings, payload):
+            attempted.append(mpesa_settings)
+            outcome = outcomes[names.index(mpesa_settings)]
+            if outcome is None:
+                frappe.flags[api.PULL_NETWORK_FAILURE_FLAG] = False
+            else:
+                api._handle_pull_failure(
+                    mpesa_settings,
+                    requests.exceptions.ConnectTimeout("timed out")
+                    if outcome == "network"
+                    else ValueError("bad config"),
+                )
+
+        with (
+            patch.object(api, "execute_pull_transactions", side_effect=fake_pull),
+            patch.object(api, "build_pull_payload", return_value={"ShortCode": "x"}),
+            patch.object(api, "record_pull_outcome"),
+            patch.object(api, "publish_pull_result"),
+            patch.object(api.frappe, "log_error"),
+            patch.object(api.frappe, "publish_realtime"),
+            patch.object(api.frappe.db, "commit"),
+        ):
+            api.execute_bulk_pull_transactions(
+                settings_names=names, start_date="2026-01-01", end_date="2026-01-02"
+            )
+        return attempted, names
+
+    def test_stops_after_consecutive_network_failures(self):
+        threshold = api.BULK_PULL_MAX_CONSECUTIVE_NETWORK_FAILURES
+        attempted, names = self._bulk(["network"] * (threshold + 5))
+        self.assertEqual(len(attempted), threshold)
+        self.assertLess(len(attempted), len(names))
+
+    def test_a_success_resets_the_counter(self):
+        threshold = api.BULK_PULL_MAX_CONSECUTIVE_NETWORK_FAILURES
+        # fail up to one short of the threshold, succeed, then fail again
+        outcomes = (
+            ["network"] * (threshold - 1) + [None] + ["network"] * (threshold - 1)
+        )
+        attempted, names = self._bulk(outcomes)
+        self.assertEqual(len(attempted), len(names), "must not trip on a flaky one")
+
+    def test_non_network_errors_never_trip_it(self):
+        threshold = api.BULK_PULL_MAX_CONSECUTIVE_NETWORK_FAILURES
+        attempted, names = self._bulk(["other"] * (threshold + 3))
+        self.assertEqual(len(attempted), len(names))

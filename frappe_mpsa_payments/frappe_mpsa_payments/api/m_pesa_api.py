@@ -1051,6 +1051,19 @@ def pull_transactions(
 PULL_MAX_ATTEMPTS = 3
 PULL_RETRY_BACKOFF_SECONDS = 2
 
+# Set by _handle_pull_failure so a caller can tell a network failure from a bad
+# response. execute_pull_transactions handles its own errors and returns None,
+# so there is no return value to inspect.
+PULL_NETWORK_FAILURE_FLAG = "mpesa_pull_network_failure"
+
+# When Safaricom is unreachable every shortcode burns the full retry budget
+# (~3 attempts x 30s connect timeout plus backoff) before failing. Proving the
+# host is down a few times over is enough - stop rather than spend the hour on
+# calls that cannot succeed. Consecutive, so one flaky shortcode among healthy
+# ones does not trip it. The next cycle re-pulls the same window anyway: it is
+# 2h wide on an hourly schedule and the import dedupes on transid.
+BULK_PULL_MAX_CONSECUTIVE_NETWORK_FAILURES = 3
+
 # Safety stop for the pagination walk, in case TotalPages is missing or wrong.
 PULL_MAX_PAGES = 50
 
@@ -1060,9 +1073,8 @@ def execute_pull_transactions(mpesa_settings: str, payload: dict) -> None:
 
     Safaricom paginates: a 48h window on a busy shortcode can come back as
     several hundred records across several pages. We used to send OffSetValue
-    once and
-    import whatever single page came back, silently dropping the rest unless
-    someone manually re-ran with offset 1, 2, 3. Now we walk the pages.
+    once and import whatever single page came back, silently dropping the rest
+    unless someone manually re-ran with offset 1, 2, 3. Now we walk the pages.
 
     Runs in the background (enqueued by `pull_transactions`). Connection-level
     failures are retried per page: the hourly job fans out one request per
@@ -1180,6 +1192,8 @@ def _handle_pull_failure(mpesa_settings: str, error) -> None:
         ),
     )
 
+    frappe.flags[PULL_NETWORK_FAILURE_FLAG] = is_network
+
     if is_network:
         frappe.log_error(
             f"Gave up after {PULL_MAX_ATTEMPTS} attempts: {error}",
@@ -1265,15 +1279,18 @@ def execute_bulk_pull_transactions(
     frappe.flags[BULK_PULL_RESULTS_FLAG] = []
 
     skipped_settings = []
+    abandoned_settings = []
+    consecutive_network_failures = 0
 
     try:
-        for name in settings_names:
+        for index, name in enumerate(settings_names):
             try:
                 payload = build_pull_payload(name, start_date, end_date, offset)
             except Exception as e:
                 skipped_settings.append(f"{name}: {e}")
                 continue
 
+            frappe.flags[PULL_NETWORK_FAILURE_FLAG] = False
             try:
                 execute_pull_transactions(mpesa_settings=name, payload=payload)
             except Exception:
@@ -1282,6 +1299,27 @@ def execute_bulk_pull_transactions(
                     f"Mpesa Bulk Pull Error [{name}]",
                 )
             frappe.db.commit()
+
+            if frappe.flags.get(PULL_NETWORK_FAILURE_FLAG):
+                consecutive_network_failures += 1
+            else:
+                consecutive_network_failures = 0
+
+            if (
+                consecutive_network_failures
+                >= BULK_PULL_MAX_CONSECUTIVE_NETWORK_FAILURES
+            ):
+                abandoned_settings = list(settings_names[index + 1 :])
+                frappe.log_error(
+                    title="Mpesa Bulk Pull Aborted",
+                    message=(
+                        f"{consecutive_network_failures} shortcodes in a row could "
+                        f"not reach Safaricom. Abandoning the remaining "
+                        f"{len(abandoned_settings)} for this cycle; the next run "
+                        f"re-pulls the same window."
+                    ),
+                )
+                break
 
         results = frappe.flags.get(BULK_PULL_RESULTS_FLAG) or []
     finally:
@@ -1308,6 +1346,12 @@ def execute_bulk_pull_transactions(
         summary_lines += ["", "Skipped (bad config):"] + [
             f"  {s}" for s in skipped_settings
         ]
+    if abandoned_settings:
+        summary_lines += [
+            "",
+            f"Abandoned after {BULK_PULL_MAX_CONSECUTIVE_NETWORK_FAILURES} "
+            "consecutive connection failures:",
+        ] + [f"  {s}" for s in abandoned_settings]
 
     frappe.log_error(
         title="Mpesa Bulk Pull Transactions Complete",
