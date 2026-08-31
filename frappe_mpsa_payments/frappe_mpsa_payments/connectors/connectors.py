@@ -10,6 +10,16 @@ from frappe.integrations.utils import create_request_log
 from frappe.model.document import Document
 from requests.auth import HTTPBasicAuth
 
+# requests takes timeout=(connect, read). Splitting them matters here: a TCP
+# connect to Safaricom either completes in a second or two or is not going to,
+# so waiting 30s for one just makes an outage expensive - the hourly pull walks
+# every shortcode and pays it on each. The read budget stays generous, because a
+# busy shortcode with many pending transactions genuinely needs the time to
+# answer.
+CONNECT_TIMEOUT_SECONDS = 10
+READ_TIMEOUT_SECONDS = 30
+DEFAULT_TIMEOUT = (CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS)
+
 
 # Remote error handler for Mpesa
 def on_mpesa_error(data, url, doctype, document_name):
@@ -92,7 +102,7 @@ class MpesaConnector(BaseMpesaConnector):
         self._custom_headers: dict = {}
         self._base_url: str | None = None
         self._url: str | None = None
-        self._timeout: int = 30
+        self._timeout: tuple[int, int] = DEFAULT_TIMEOUT
         self.integration_request = None
         self.doctype = self.document_name = self.error = None
 
@@ -136,8 +146,13 @@ class MpesaConnector(BaseMpesaConnector):
         )
         frappe.db.commit()
 
-    def _set_timeout(self, seconds: int):
-        self._timeout = seconds
+    def _set_timeout(self, seconds: int | tuple[int, int]):
+        """A bare number sets the read budget; the connect budget is unchanged."""
+        self._timeout = (
+            seconds
+            if isinstance(seconds, tuple)
+            else (CONNECT_TIMEOUT_SECONDS, seconds)
+        )
         return self
 
     def authenticate(self) -> str:
@@ -159,7 +174,9 @@ class MpesaConnector(BaseMpesaConnector):
                 reference_doctype="Mpesa Settings",
             )
             r = requests.get(
-                url, auth=HTTPBasicAuth(s["consumer_key"], s["consumer_secret"])
+                url,
+                auth=HTTPBasicAuth(s["consumer_key"], s["consumer_secret"]),
+                timeout=self._timeout,
             )
             r.raise_for_status()
             data = r.json()

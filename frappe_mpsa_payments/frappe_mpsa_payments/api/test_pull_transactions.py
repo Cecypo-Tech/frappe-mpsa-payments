@@ -6,6 +6,7 @@ site. test_mpesa_settings.py needs a specific company fixture and cannot run
 on most benches, which is how the 1001-reported-as-success bug survived.
 """
 
+import re
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,7 @@ from frappe_mpsa_payments.frappe_mpsa_payments.api import m_pesa_api as api
 from frappe_mpsa_payments.frappe_mpsa_payments.api import (
     mpesa_response_handler as handler,
 )
+from frappe_mpsa_payments.frappe_mpsa_payments.connectors import connectors
 
 SETTINGS_NAME = "_Pull Test"
 
@@ -198,3 +200,38 @@ class TestBulkPullCircuitBreaker(unittest.TestCase):
         threshold = api.BULK_PULL_MAX_CONSECUTIVE_NETWORK_FAILURES
         attempted, names = self._bulk(["other"] * (threshold + 3))
         self.assertEqual(len(attempted), len(names))
+
+
+class TestConnectorTimeouts(unittest.TestCase):
+    """A hung Safaricom connection must not pin a worker indefinitely."""
+
+    def test_default_is_a_connect_read_tuple(self):
+        c = connectors.MpesaConnector(settings_name="_Pull Test")
+        self.assertEqual(c._timeout, (10, 30))
+
+    def test_connect_budget_is_shorter_than_read_budget(self):
+        connect, read = connectors.DEFAULT_TIMEOUT
+        self.assertLess(connect, read)
+
+    def test_a_bare_number_sets_the_read_budget_only(self):
+        c = connectors.MpesaConnector(settings_name="_Pull Test")
+        c._set_timeout(120)
+        self.assertEqual(c._timeout, (connectors.CONNECT_TIMEOUT_SECONDS, 120))
+
+    def test_a_tuple_is_taken_as_given(self):
+        c = connectors.MpesaConnector(settings_name="_Pull Test")
+        c._set_timeout((5, 45))
+        self.assertEqual(c._timeout, (5, 45))
+
+    def test_every_outgoing_request_is_bounded(self):
+        """Including authenticate() - it used to have no timeout at all."""
+        import inspect
+
+        src = inspect.getsource(connectors)
+        call_sites = re.findall(r"requests\.(?:get|post|put|patch)\(", src)
+        self.assertTrue(call_sites, "expected to find outgoing requests")
+        self.assertEqual(
+            src.count("timeout=self._timeout"),
+            len(call_sites),
+            "a requests call is missing timeout=self._timeout",
+        )
