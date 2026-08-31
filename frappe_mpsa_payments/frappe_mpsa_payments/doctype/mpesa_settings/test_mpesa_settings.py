@@ -68,7 +68,14 @@ class TestMpesaSettings(FrappeTestCase):
 
         # These tests are about POS Invoice payments, so POS has to be in POS
         # Invoice mode - a site switched to Sales Invoice mode refuses them.
-        frappe.db.set_single_value("POS Settings", "invoice_type", "POS Invoice")
+        #
+        # Only written when it actually differs. Writing it unconditionally
+        # locked the POS Settings row in tabSingles on every one of these tests,
+        # which deadlocked against anything else touching the site while the
+        # suite ran - reproducible, and the cause of an intermittent failure in
+        # this class.
+        if frappe.db.get_single_value("POS Settings", "invoice_type") != "POS Invoice":
+            frappe.db.set_single_value("POS Settings", "invoice_type", "POS Invoice")
 
         # A POS Invoice will not submit against a profile with no open shift.
         # The shift is opened for a cashier of this suite's own, because a
