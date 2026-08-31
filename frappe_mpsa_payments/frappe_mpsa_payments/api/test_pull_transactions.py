@@ -88,7 +88,7 @@ class TestPullTransactionResponses(unittest.TestCase):
         self.assertEqual(msg.get("count"), 0)
 
     def test_batch_mode_suppresses_the_per_shortcode_log(self):
-        """~69 shortcodes x 12 runs a day made these logs unreadable."""
+        """Dozens of shortcodes, pulled hourly, made these logs unreadable."""
         msg, logged = self._run(
             {"ResponseCode": "1001", "ResponseMessage": "No records found"}, batch=True
         )

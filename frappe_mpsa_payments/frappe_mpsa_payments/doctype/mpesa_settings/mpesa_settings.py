@@ -679,7 +679,7 @@ def get_doctype_fields(doctype):
         return []
 
 
-# Safaricom throttles bursts; pace the batch rather than fire 69 requests flat out.
+# Safaricom throttles bursts; pace the batch rather than fire every request flat out.
 BULK_REGISTRATION_DELAY_SECONDS = 1
 
 PULL_REGISTRATION_CALLBACK = (

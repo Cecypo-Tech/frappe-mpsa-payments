@@ -1058,8 +1058,9 @@ PULL_MAX_PAGES = 50
 def execute_pull_transactions(mpesa_settings: str, payload: dict) -> None:
     """Pull every page Safaricom has for the window, not just the first one.
 
-    Safaricom paginates: a 48h window on a busy shortcode came back as
-    TotalRecords 318 across TotalPages 4. We used to send OffSetValue once and
+    Safaricom paginates: a 48h window on a busy shortcode can come back as
+    several hundred records across several pages. We used to send OffSetValue
+    once and
     import whatever single page came back, silently dropping the rest unless
     someone manually re-ran with offset 1, 2, 3. Now we walk the pages.
 

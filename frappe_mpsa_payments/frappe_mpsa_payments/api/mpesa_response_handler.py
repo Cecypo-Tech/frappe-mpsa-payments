@@ -150,7 +150,7 @@ BULK_PULL_BATCH_FLAG = "mpesa_bulk_pull_batch"
 def publish_pull_result(message: dict) -> None:
     """Emit one toast per pull - unless a bulk run is collecting them.
 
-    A bulk pull over 69 shortcodes would otherwise fire 69 separate popups. The
+    A bulk pull over many shortcodes would otherwise fire one popup each. The
     bulk worker sets the flag, runs everything in its own job, and publishes a
     single summary at the end.
     """
@@ -245,7 +245,7 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
             log_message.append(PULL_NO_RECORDS_HINT)
 
         # In a batch sweep the summary covers this; logging each shortcode
-        # separately produced ~800 near-identical entries a day.
+        # separately produced hundreds of near-identical entries a day.
         if not frappe.flags.get(BULK_PULL_BATCH_FLAG):
             frappe.log_error(
                 title=f"Mpesa Pull Transaction: {response_code} from Safaricom",

@@ -9,9 +9,9 @@ HOURLY_PULL_WINDOW_HOURS = -2
 def run_hourly_pull_transactions():
     """Pull every enabled shortcode in one job.
 
-    This used to enqueue one job per Mpesa Settings doc. With ~69 shortcodes
-    that meant 69 jobs an hour, each writing its own Error Log when Safaricom
-    answered 1001 - roughly 800 log entries a day, almost all of them just
+    This used to enqueue one job per Mpesa Settings doc. With dozens of
+    shortcodes that meant dozens of jobs an hour, each writing its own Error
+    Log when Safaricom answered 1001 - hundreds of entries a day, almost all just
     "this branch took no payments in the last two hours". One job means one
     summary entry per run.
     """
@@ -23,8 +23,8 @@ def run_hourly_pull_transactions():
     if not settings_list:
         return
 
-    # A slow run must not stack on top of itself - 69 shortcodes with retries
-    # can outlast the hour.
+    # A slow run must not stack on top of itself - dozens of shortcodes with
+    # retries can outlast the hour.
     if is_job_enqueued(HOURLY_PULL_JOB_ID):
         frappe.logger().info("Hourly Mpesa pull still running, skipping this cycle")
         return
