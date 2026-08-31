@@ -19,6 +19,9 @@ test_dependencies = ["Company", "Item", "Customer", "POS Profile"]
 #: ERPNext's own test company, which owns the accounts these tests post to.
 POS_COMPANY = "Wind Power LLC"
 
+#: The name erpnext's make_pos_profile defaults to when no name is passed.
+POS_PROFILE = "_Test POS Profile"
+
 
 class TestMpesaSettings(FrappeTestCase):
     def setUp(self):
@@ -52,18 +55,27 @@ class TestMpesaSettings(FrappeTestCase):
 
         self.customer = create_customer("_Test Customer", "USD")
         self.item = make_item(properties={"is_stock_item": 1}).name
-        pos_profile = make_pos_profile(
-            company=POS_COMPANY,
-            cost_center="Main - WP",
-            currency="USD",
-            expense_account="Cost of Goods Sold - WP",
-            income_account="Sales - WP",
-            selling_price_list="Standard Selling",
-            territory="United States",
-            warehouse="Stores - WP",
-            write_off_account="Write Off - WP",
-            write_off_cost_center="Main - WP",
-        )
+        # Reuse the profile when one is already there. make_pos_profile guards
+        # its own insert, but only against the committed row - inside the test
+        # transaction the guard can miss, and inserting a POS Profile fires
+        # POSProfile.on_update -> set_defaults -> clear_default("is_pos"), which
+        # is a keyed DELETE across the small, global tabDefaultValue. Paying that
+        # on all twelve tests is what made this class deadlock intermittently.
+        if frappe.db.exists("POS Profile", POS_PROFILE):
+            pos_profile = frappe.get_doc("POS Profile", POS_PROFILE)
+        else:
+            pos_profile = make_pos_profile(
+                company=POS_COMPANY,
+                cost_center="Main - WP",
+                currency="USD",
+                expense_account="Cost of Goods Sold - WP",
+                income_account="Sales - WP",
+                selling_price_list="Standard Selling",
+                territory="United States",
+                warehouse="Stores - WP",
+                write_off_account="Write Off - WP",
+                write_off_cost_center="Main - WP",
+            )
         self.pos_profile = pos_profile.name
 
         # These tests are about POS Invoice payments, so POS has to be in POS
