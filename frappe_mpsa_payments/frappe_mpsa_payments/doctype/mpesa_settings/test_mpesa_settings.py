@@ -49,7 +49,9 @@ class TestMpesaSettings(FrappeTestCase):
             frappe.delete_doc("Integration Request", stale.name, force=1)
 
         # create payment gateway in setup
-        create_mpesa_settings(payment_gateway_name="_Test")
+        # A company, so a fresh site - no default company - still gets a
+        # gateway account for test_creation_of_payment_gateway to find.
+        create_mpesa_settings(payment_gateway_name="_Test", company=POS_COMPANY)
         create_mpesa_settings(payment_gateway_name="_Account Balance")
         create_mpesa_settings(payment_gateway_name="Payment", company=POS_COMPANY)
 
@@ -849,3 +851,80 @@ def get_account_balance_callback_payload():
             },
         }
     }
+
+
+class TestGatewaySetupOnANewSite(FrappeTestCase):
+    """What saving Mpesa Settings sets up on a site that has none of it yet."""
+
+    def test_no_gateway_account_means_no_mode_of_payment_and_no_error(self):
+        """With no company to make a gateway account in, there is nothing to
+        attach a mode of payment to. The settings save used to fail on
+        "Mode of Payment None not found" instead."""
+        gateway = "Mpesa-_T" + frappe.generate_hash(length=8)
+
+        self.assertIsNone(create_mode_of_payment(gateway, payment_type="Phone"))
+        self.assertFalse(frappe.db.exists("Mode of Payment", gateway))
+
+    def test_a_bank_account_without_a_currency_takes_the_companys(self):
+        """A safeguard: ERPNext fetches the gateway account's currency from the
+        payment account before naming it, so an account with no currency
+        would raise a TypeError. It gets the company's currency instead."""
+        from erpnext.setup.setup_wizard.operations.install_fixtures import (
+            create_bank_account,
+        )
+
+        from frappe_mpsa_payments.utils.utils import (
+            create_payment_gateway,
+            create_payment_gateway_account,
+        )
+
+        gateway = "Mpesa-_T" + frappe.generate_hash(length=8)
+        create_payment_gateway(gateway)
+        account = create_bank_account(
+            {"company_name": POS_COMPANY, "bank_account": gateway}
+        )
+        frappe.db.set_value("Account", account.name, "account_currency", None)
+        currency, abbr = frappe.db.get_value(
+            "Company", POS_COMPANY, ["default_currency", "abbr"]
+        )
+
+        create_payment_gateway_account(
+            gateway, payment_channel="Phone", company=POS_COMPANY
+        )
+
+        self.assertTrue(
+            frappe.db.exists(
+                "Payment Gateway Account", f"{gateway} - {currency} - {abbr}"
+            )
+        )
+
+    def test_the_gateway_account_is_filed_under_its_company(self):
+        """The failure CI hit: no company was passed, so ERPNext named the
+        account with the site's default company's abbreviation - None on a
+        fresh site, raising a TypeError, and Dev Co's on dev."""
+        from erpnext.setup.setup_wizard.operations.install_fixtures import (
+            create_bank_account,
+        )
+
+        from frappe_mpsa_payments.utils.utils import (
+            create_payment_gateway,
+            create_payment_gateway_account,
+        )
+
+        gateway = "Mpesa-_T" + frappe.generate_hash(length=8)
+        create_payment_gateway(gateway)
+        create_bank_account({"company_name": POS_COMPANY, "bank_account": gateway})
+        currency, abbr = frappe.db.get_value(
+            "Company", POS_COMPANY, ["default_currency", "abbr"]
+        )
+
+        create_payment_gateway_account(
+            gateway, payment_channel="Phone", company=POS_COMPANY
+        )
+
+        self.assertEqual(
+            frappe.db.get_value(
+                "Payment Gateway Account", f"{gateway} - {currency} - {abbr}", "company"
+            ),
+            POS_COMPANY,
+        )

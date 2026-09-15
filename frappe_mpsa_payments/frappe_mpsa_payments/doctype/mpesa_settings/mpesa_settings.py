@@ -480,7 +480,7 @@ def fetch_param_value(response: dict, key: str, key_field: str) -> str | None:
 
 def create_mode_of_payment(
     gateway: str, payment_type: str = "General", company: str = None
-) -> Document:
+) -> Document | None:
     with erpnext_app_import_guard():
         from erpnext import get_default_company
 
@@ -508,6 +508,12 @@ def create_mode_of_payment(
         mode_of_payment.insert(ignore_permissions=True)
 
         return mode_of_payment
+
+    if not mode_of_payment:
+        # No gateway account to attach it to, usually because there was no
+        # company to create one in. Looking it up anyway raised "Mode of
+        # Payment None not found" and failed the whole settings save.
+        return None
 
     return frappe.get_doc("Mode of Payment", mode_of_payment)
 
