@@ -26,15 +26,6 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
 
     @classmethod
     def setUpClass(cls):
-        # company, customer, mode_of_payment and payment_entry are custom fields
-        # created on migrate, which a freshly installed test site never ran.
-        # Created before the base class commits, and only when missing.
-        if not frappe.db.has_column("Mpesa C2B Payment Register", "payment_entry"):
-            from frappe_mpsa_payments.frappe_mpsa_payments.migrate import (
-                create_custom_erpnext_fields,
-            )
-
-            create_custom_erpnext_fields()
         super().setUpClass()
         for doctype in ("Sales Invoice", "Sales Order", "Quotation", "Customer"):
             cls.METAS[doctype] = frappe.get_meta(doctype)

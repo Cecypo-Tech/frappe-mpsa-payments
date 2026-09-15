@@ -382,11 +382,17 @@ def create_custom_erpnext_fields():
 
 
 def create_fields(custom_fields):
+    # One doctype per call. create_custom_fields holds back the column changes
+    # for a whole batch until it ends, but checks each doctype's Document Links
+    # as it goes. B2C Payment Disbursement links through the
+    # b2c_payment_disbursement columns on Journal Entry Account and Payment
+    # Entry Reference, which do not exist yet in the middle of a batch. Migrate
+    # skips that check; install does not, so a fresh install failed here.
     for doctype, fields in custom_fields.items():
         for field in fields:
             field.setdefault("module", MODULE)
 
-    create_custom_fields(custom_fields)
+        create_custom_fields({doctype: fields})
 
 
 def create_erpnext_property_setters():

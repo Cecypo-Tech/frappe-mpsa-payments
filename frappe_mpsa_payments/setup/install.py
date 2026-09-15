@@ -33,7 +33,13 @@ PERMISSIONS = {
 
 
 def after_install():
-    setup_importer_role()
+    # A fresh install has to end where a migrate leaves an existing site. The
+    # custom fields and property setters this app's doctypes and tests rely on
+    # (company, customer, payment_entry, ...) are created only by after_migrate,
+    # which also sets up the importer role.
+    from frappe_mpsa_payments.frappe_mpsa_payments.migrate import after_migrate
+
+    after_migrate()
 
 
 def setup_importer_role():
