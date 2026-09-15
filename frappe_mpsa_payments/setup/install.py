@@ -36,7 +36,9 @@ def after_install():
     # A fresh install has to end where a migrate leaves an existing site. The
     # custom fields and property setters this app's doctypes and tests rely on
     # (company, customer, payment_entry, ...) are created only by after_migrate,
-    # which also sets up the importer role.
+    # which also sets up the importer role. Install runs this before it syncs
+    # fixtures and customizations, the reverse of migrate, so nothing here may
+    # depend on those.
     from frappe_mpsa_payments.frappe_mpsa_payments.migrate import after_migrate
 
     after_migrate()

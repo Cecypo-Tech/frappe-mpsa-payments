@@ -4,6 +4,7 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe_mpsa_payments.setup.install import setup_importer_role
 
 from .patches.mpesa_custom_fields import create_custom_pos_fields
+from .patches.payment_entry_custom_fields import create_payment_entry_mpesa_fields
 
 MODULE = "Frappe Mpsa Payments"
 
@@ -23,6 +24,9 @@ def after_migrate():
     if is_app_installed("erpnext"):
         create_custom_pos_fields()
         create_custom_erpnext_fields()
+        # Also here, not only in its patch: install marks every patch as already
+        # applied, so a new site would never get the Payment Entry STK push fields.
+        create_payment_entry_mpesa_fields()
         create_erpnext_property_setters()
 
     if is_app_installed("lending"):

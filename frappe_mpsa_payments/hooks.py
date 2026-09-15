@@ -102,7 +102,6 @@ doctype_js = {
 # ------------
 
 # before_install = "frappe_mpsa_payments.install.before_install"
-# after_install = "frappe_mpsa_payments.frappe_mpsa_payments.migrate.after_migrate"
 
 # Uninstallation
 # ------------
