@@ -26,6 +26,15 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
 
     @classmethod
     def setUpClass(cls):
+        # company, customer, mode_of_payment and payment_entry are custom fields
+        # created on migrate, which a freshly installed test site never ran.
+        # Created before the base class commits, and only when missing.
+        if not frappe.db.has_column("Mpesa C2B Payment Register", "payment_entry"):
+            from frappe_mpsa_payments.frappe_mpsa_payments.migrate import (
+                create_custom_erpnext_fields,
+            )
+
+            create_custom_erpnext_fields()
         super().setUpClass()
         for doctype in ("Sales Invoice", "Sales Order", "Quotation", "Customer"):
             cls.METAS[doctype] = frappe.get_meta(doctype)
@@ -568,7 +577,7 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         cls = type(doc)
 
         with (
-            fake_entry,
+            fake_entry as create_entry,
             patch.object(
                 cls, "_reconcile_payment", autospec=True, wraps=cls._reconcile_payment
             ) as reconcile,
@@ -578,6 +587,7 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
             )
 
         self.assertEqual(reconcile.call_count, 1)
+        self.assertEqual(create_entry.call_count, 1, "before_submit ran twice")
         self.assertEqual(
             frappe.db.get_value(doc.doctype, doc.name, ["docstatus", "payment_entry"]),
             (1, payment_entry),
@@ -617,3 +627,49 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
 
         self.assertEqual(doc.docstatus, 1)
         self.assertEqual(doc.payment_entry, payment_entry)
+
+    def test_a_save_notification_is_sent_once_per_payment(self):
+        """A "payment received" Save alert must not go out twice.
+
+        insert() and the submitted copy each keep their own list of alerts
+        already sent, so the outer insert would resend every Save alert.
+        """
+        doc, _payment_entry, fake_entry = self._auto_reconciling_register()
+        alert_name = f"_Test Save Alert {frappe.generate_hash(length=8)}"
+        frappe.get_doc(
+            {
+                "doctype": "Notification",
+                "document_type": "Mpesa C2B Payment Register",
+                "event": "Save",
+                "channel": "System Notification",
+                "subject": "Payment received",
+                "enabled": 1,
+            }
+        ).insert(ignore_permissions=True, set_name=alert_name)
+        # Deleting clears the per-doctype notification cache, so no later test
+        # is handed an alert that the class rollback has removed.
+        self.addCleanup(
+            frappe.delete_doc,
+            "Notification",
+            alert_name,
+            ignore_permissions=True,
+            force=True,
+        )
+
+        with (
+            fake_entry,
+            patch(
+                "frappe.email.doctype.notification.notification.evaluate_alert"
+            ) as send,
+        ):
+            doc.insert(
+                ignore_permissions=True, ignore_links=True, ignore_mandatory=True
+            )
+
+        def sent(call):
+            alert = call.kwargs.get(
+                "alert", call.args[1] if len(call.args) > 1 else None
+            )
+            return getattr(alert, "name", alert)
+
+        self.assertEqual([sent(c) for c in send.call_args_list], [alert_name])

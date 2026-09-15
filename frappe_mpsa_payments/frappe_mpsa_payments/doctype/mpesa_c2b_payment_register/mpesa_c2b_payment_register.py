@@ -71,9 +71,16 @@ class MpesaC2BPaymentRegister(Document):
             # self.submit() left self marked as a submit, so on_submit and every
             # submit hook ran a second time for each payment.
             submitted = frappe.get_doc(self.doctype, self.name)
+            # Only the flags callers actually pass. Copying all of self.flags
+            # would also copy in_insert and the notification bookkeeping.
             for flag in ("ignore_permissions", "ignore_links", "ignore_mandatory"):
                 submitted.flags[flag] = self.flags.get(flag)
             submitted.submit()
+            # The copy sent its own Save and Submit alerts. Record them on self,
+            # or the outer insert's on_update sends every Save alert again.
+            self.flags.notifications_executed.extend(
+                submitted.flags.notifications_executed or []
+            )
 
             # Callers such as the statement importer read the outcome off the
             # document they inserted.
