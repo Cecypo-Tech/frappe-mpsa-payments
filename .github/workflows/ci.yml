@@ -93,6 +93,9 @@ jobs:
           bench get-app erpnext --branch version-16
           bench get-app hrms --branch version-16
           bench get-app lending --branch version-16
+          # ERPNext's phone Payment Request - the M-Pesa STK push - loads its
+          # gateway controller through the payments app, and production has it.
+          bench get-app payments --branch version-16
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL character_set_server = 'utf8mb4'"
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL collation_server = 'utf8mb4_unicode_ci'"
 
@@ -105,6 +108,7 @@ jobs:
           bench --site test_site install-app erpnext
           bench --site test_site install-app hrms
           bench --site test_site install-app lending
+          bench --site test_site install-app payments
           bench --site test_site install-app frappe_mpsa_payments
           bench build
         env:
