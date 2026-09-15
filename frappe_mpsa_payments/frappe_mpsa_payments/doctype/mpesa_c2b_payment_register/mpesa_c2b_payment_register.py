@@ -65,7 +65,19 @@ class MpesaC2BPaymentRegister(Document):
                 return
 
             self.db_set("submit_payment", 1)
-            self.submit()
+
+            # Submit a fresh copy, not self. insert() is still running and calls
+            # the post-save methods for self once after_insert returns; a nested
+            # self.submit() left self marked as a submit, so on_submit and every
+            # submit hook ran a second time for each payment.
+            submitted = frappe.get_doc(self.doctype, self.name)
+            for flag in ("ignore_permissions", "ignore_links", "ignore_mandatory"):
+                submitted.flags[flag] = self.flags.get(flag)
+            submitted.submit()
+
+            # Callers such as the statement importer read the outcome off the
+            # document they inserted.
+            self.reload()
 
         except Exception as e:
             frappe.log_error(frappe.get_traceback(), f"C2B Auto-submit Error: {str(e)}")

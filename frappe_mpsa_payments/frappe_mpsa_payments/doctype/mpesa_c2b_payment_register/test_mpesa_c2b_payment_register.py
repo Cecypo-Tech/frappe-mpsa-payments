@@ -519,3 +519,101 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
             pluck="description",
         )
         self.assertCountEqual(kept, [f"inserted {marker}", f"submitted {marker}"])
+
+    # -- auto-submit on insert -----------------------------------------------
+
+    def _auto_reconciling_register(self):
+        """A register whose insert auto-submits, with only the Payment Entry faked.
+
+        The settings row is written straight to the table so no Mpesa Settings
+        validation runs, and the shortcode is unique so no cached lookup from
+        another test can answer for it.
+        """
+        shortcode = "T" + frappe.generate_hash(length=8)
+        frappe.get_doc(
+            {
+                "doctype": "Mpesa Settings",
+                "name": f"_Test Auto Submit {shortcode}",
+                "business_shortcode": shortcode,
+                "auto_reconcile_c2b": 1,
+                "auto_create_sales_invoice": 0,
+            }
+        ).db_insert()
+
+        doc = frappe.new_doc("Mpesa C2B Payment Register")
+        doc.update(
+            {
+                "businessshortcode": shortcode,
+                "transamount": 1160,
+                "company": "_Test Company",
+                "customer": "_Test Customer",
+                "mode_of_payment": "_Test Mpesa",
+                "firstname": "TEST",
+            }
+        )
+        payment_entry = f"PE-{shortcode}"
+        fake_entry = patch(
+            f"{MODULE}.create_payment_entry",
+            return_value=frappe._dict(name=payment_entry),
+        )
+        return doc, payment_entry, fake_entry
+
+    def test_an_auto_submitted_payment_is_reconciled_once(self):
+        """after_insert submits, and insert then ran on_submit a second time.
+
+        Every reconciliation step ran twice per paybill payment: a failing
+        auto-raised invoice was attempted and logged twice.
+        """
+        doc, payment_entry, fake_entry = self._auto_reconciling_register()
+        cls = type(doc)
+
+        with (
+            fake_entry,
+            patch.object(
+                cls, "_reconcile_payment", autospec=True, wraps=cls._reconcile_payment
+            ) as reconcile,
+        ):
+            doc.insert(
+                ignore_permissions=True, ignore_links=True, ignore_mandatory=True
+            )
+
+        self.assertEqual(reconcile.call_count, 1)
+        self.assertEqual(
+            frappe.db.get_value(doc.doctype, doc.name, ["docstatus", "payment_entry"]),
+            (1, payment_entry),
+        )
+
+    def test_a_guest_callback_still_submits_the_payment(self):
+        """Safaricom's callback inserts as Guest, relying on ignore_permissions.
+
+        Whatever submits the register must carry that through, or the payment
+        silently stays a draft.
+        """
+        doc, payment_entry, fake_entry = self._auto_reconciling_register()
+
+        frappe.set_user("Guest")
+        try:
+            with fake_entry:
+                doc.insert(
+                    ignore_permissions=True, ignore_links=True, ignore_mandatory=True
+                )
+        finally:
+            frappe.set_user("Administrator")
+
+        self.assertEqual(
+            frappe.db.get_value(doc.doctype, doc.name, ["docstatus", "payment_entry"]),
+            (1, payment_entry),
+        )
+
+    def test_the_inserted_document_shows_it_was_submitted(self):
+        """The statement importer reports docstatus and payment_entry off the
+        document it inserted, so that copy must reflect the submit."""
+        doc, payment_entry, fake_entry = self._auto_reconciling_register()
+
+        with fake_entry:
+            doc.insert(
+                ignore_permissions=True, ignore_links=True, ignore_mandatory=True
+            )
+
+        self.assertEqual(doc.docstatus, 1)
+        self.assertEqual(doc.payment_entry, payment_entry)
