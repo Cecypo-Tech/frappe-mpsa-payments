@@ -490,6 +490,8 @@ class MpesaC2BPaymentRegister(Document):
         except Exception:
             # Undo first, then log. On MariaDB the Error Log table is MyISAM and
             # survives the rollback either way; on Postgres it would not.
+            # Known limit: after-commit callbacks the failed insert queued
+            # (realtime updates, webhooks) are not cancelled by the rollback.
             frappe.db.rollback(save_point=savepoint)
             frappe.log_error(
                 frappe.get_traceback(),

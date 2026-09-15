@@ -441,6 +441,12 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
         """
         doc = self._register()
         invoice, marker, _failure = self._invoice_that_fails_on_submit()
+        # Stands in for the register and its Payment Entry, written earlier in
+        # the same transaction. Only the invoice's writes may be undone: a full
+        # rollback would lose the payment itself.
+        frappe.get_doc({"doctype": "ToDo", "description": f"before {marker}"}).insert(
+            ignore_permissions=True
+        )
 
         with patch(
             "erpnext.selling.doctype.sales_order.sales_order.make_sales_invoice",
@@ -449,12 +455,16 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
             result = doc._create_sales_invoice_from_order("SAL-ORD-0001")
 
         self.assertIsNone(result)
-        leftovers = frappe.get_all(
+        remaining = frappe.get_all(
             "ToDo",
             filters={"description": ["like", f"%{marker}"]},
             pluck="description",
         )
-        self.assertEqual(leftovers, [], "the failed submit's writes were kept")
+        self.assertEqual(
+            remaining,
+            [f"before {marker}"],
+            "the rollback kept the failed submit's writes or took earlier ones",
+        )
 
     def test_a_failed_invoice_submit_is_still_logged(self):
         """Rolling back the submit must still leave a record of why it failed.
@@ -475,3 +485,37 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
             frappe.db.exists("Error Log", {"error": ["like", f"%{failure}%"]}),
             "the failure never reached the Error Log",
         )
+
+    def test_a_successful_invoice_is_kept(self):
+        """The savepoint must only undo a failure, never a submitted invoice."""
+        doc = self._register()
+        marker = frappe.generate_hash(length=12)
+
+        class InvoiceThatSubmits:
+            allocate_advances_automatically = 0
+            name = f"SINV-{marker}"
+
+            def insert(self, ignore_permissions=False):
+                frappe.get_doc(
+                    {"doctype": "ToDo", "description": f"inserted {marker}"}
+                ).insert(ignore_permissions=True)
+                return self
+
+            def submit(self):
+                frappe.get_doc(
+                    {"doctype": "ToDo", "description": f"submitted {marker}"}
+                ).insert(ignore_permissions=True)
+
+        with patch(
+            "erpnext.selling.doctype.sales_order.sales_order.make_sales_invoice",
+            return_value=InvoiceThatSubmits(),
+        ):
+            result = doc._create_sales_invoice_from_order("SAL-ORD-0001")
+
+        self.assertEqual(result, f"SINV-{marker}")
+        kept = frappe.get_all(
+            "ToDo",
+            filters={"description": ["like", f"%{marker}"]},
+            pluck="description",
+        )
+        self.assertCountEqual(kept, [f"inserted {marker}", f"submitted {marker}"])
