@@ -400,3 +400,78 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
             patch.object(type(doc), "_reconciliation_order", lambda _self: order),
         ):
             self.assertEqual(doc._get_matching_refs(), (None, None))
+
+    # -- auto-raised invoice -------------------------------------------------
+
+    def _invoice_that_fails_on_submit(self):
+        """A stand-in for the invoice make_sales_invoice returns.
+
+        It writes to the database on insert and again on submit, then fails
+        the way the real one did for INV-05124: ERPNext marks the order billed
+        and writes the stock ledger before it posts the GL, so an insufficient
+        stock error arrives with those rows already written.
+        """
+        marker = frappe.generate_hash(length=12)
+        failure = f"2.0 units needed to complete this transaction {marker}"
+
+        class InvoiceThatFailsOnSubmit:
+            allocate_advances_automatically = 0
+
+            def insert(self, ignore_permissions=False):
+                frappe.get_doc(
+                    {"doctype": "ToDo", "description": f"inserted {marker}"}
+                ).insert(ignore_permissions=True)
+                return self
+
+            def submit(self):
+                frappe.get_doc(
+                    {"doctype": "ToDo", "description": f"submitted {marker}"}
+                ).insert(ignore_permissions=True)
+                from erpnext.stock.stock_ledger import NegativeStockError
+
+                raise NegativeStockError(failure)
+
+        return InvoiceThatFailsOnSubmit(), marker, failure
+
+    def test_a_failed_invoice_submit_leaves_nothing_behind(self):
+        """INV-05124: a half-submitted invoice was committed with the payment.
+
+        The failure is swallowed so the payment still reaches the books, which
+        means whatever the submit wrote before it failed must be undone here.
+        """
+        doc = self._register()
+        invoice, marker, _failure = self._invoice_that_fails_on_submit()
+
+        with patch(
+            "erpnext.selling.doctype.sales_order.sales_order.make_sales_invoice",
+            return_value=invoice,
+        ):
+            result = doc._create_sales_invoice_from_order("SAL-ORD-0001")
+
+        self.assertIsNone(result)
+        leftovers = frappe.get_all(
+            "ToDo",
+            filters={"description": ["like", f"%{marker}"]},
+            pluck="description",
+        )
+        self.assertEqual(leftovers, [], "the failed submit's writes were kept")
+
+    def test_a_failed_invoice_submit_is_still_logged(self):
+        """Rolling back the submit must still leave a record of why it failed.
+
+        The rollback hides the failure from the books, so the Error Log is the
+        only place anyone can find out the order was never invoiced.
+        """
+        doc = self._register()
+        invoice, _marker, failure = self._invoice_that_fails_on_submit()
+
+        with patch(
+            "erpnext.selling.doctype.sales_order.sales_order.make_sales_invoice",
+            return_value=invoice,
+        ):
+            doc._create_sales_invoice_from_order("SAL-ORD-0001")
+
+        self.assertTrue(
+            frappe.db.exists("Error Log", {"error": ["like", f"%{failure}%"]}),
+            "the failure never reached the Error Log",
+        )

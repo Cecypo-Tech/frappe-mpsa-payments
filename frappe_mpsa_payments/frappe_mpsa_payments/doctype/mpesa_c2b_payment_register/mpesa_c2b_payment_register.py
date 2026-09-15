@@ -466,6 +466,14 @@ class MpesaC2BPaymentRegister(Document):
         )
 
     def _create_sales_invoice_from_order(self, sales_order):
+        # Submitting an invoice writes before it can fail: ERPNext marks the
+        # order billed and moves stock before it posts the GL. The failure is
+        # swallowed so the payment still reaches the books, and without the
+        # savepoint those earlier writes were committed with it - a submitted
+        # invoice with stock moved and nothing in the ledger (INV-05124).
+        savepoint = "c2b_auto_sales_invoice"
+        frappe.db.savepoint(savepoint)
+
         try:
             from erpnext.selling.doctype.sales_order.sales_order import (
                 make_sales_invoice,
@@ -479,14 +487,18 @@ class MpesaC2BPaymentRegister(Document):
             si.insert(ignore_permissions=True)
             si.submit()
 
-            return si.name
-
         except Exception:
+            # Undo first, then log. On MariaDB the Error Log table is MyISAM and
+            # survives the rollback either way; on Postgres it would not.
+            frappe.db.rollback(save_point=savepoint)
             frappe.log_error(
                 frappe.get_traceback(),
                 f"Sales Invoice Creation Failed for SO {sales_order}",
             )
             return None
+
+        frappe.db.release_savepoint(savepoint)
+        return si.name
 
     def _reconcile_against_invoice(self, invoice_list):
         if isinstance(invoice_list, str):
