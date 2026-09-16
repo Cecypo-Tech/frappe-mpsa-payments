@@ -735,7 +735,7 @@ def _make_suite_pos_profile():
     before inserting, which is harmless on a throwaway test site and wipes a
     working one's tills.
     """
-    _ensure_mode_of_payment_account("Cash", POS_COMPANY, "Sales - WP")
+    _ensure_mode_of_payment_account("Cash", POS_COMPANY, "Cash - WP")
     pos_profile = frappe.get_doc(
         {
             "doctype": "POS Profile",
