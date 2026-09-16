@@ -19,8 +19,11 @@ test_dependencies = ["Company", "Item", "Customer", "POS Profile"]
 #: ERPNext's own test company, which owns the accounts these tests post to.
 POS_COMPANY = "Wind Power LLC"
 
-#: The name erpnext's make_pos_profile defaults to when no name is passed.
-POS_PROFILE = "_Test POS Profile"
+#: This suite's own till. Not erpnext's shared "_Test POS Profile": setUp retires
+#: stale shifts on its profile, and on a working site that profile carries real
+#: cashiers' shifts too - retiring those left them marked Closed with no closing
+#: entry, a shift nothing could open past or close.
+POS_PROFILE = "_Test Mpesa POS Profile"
 
 
 class TestMpesaSettings(FrappeTestCase):
@@ -34,9 +37,6 @@ class TestMpesaSettings(FrappeTestCase):
         )
         from erpnext.accounts.doctype.pos_opening_entry.test_pos_opening_entry import (
             create_opening_entry,
-        )
-        from erpnext.accounts.doctype.pos_profile.test_pos_profile import (
-            make_pos_profile,
         )
         from erpnext.stock.doctype.item.test_item import make_item
 
@@ -57,27 +57,15 @@ class TestMpesaSettings(FrappeTestCase):
 
         self.customer = create_customer("_Test Customer", "USD")
         self.item = make_item(properties={"is_stock_item": 1}).name
-        # Reuse the profile when one is already there. make_pos_profile guards
-        # its own insert, but only against the committed row - inside the test
-        # transaction the guard can miss, and inserting a POS Profile fires
-        # POSProfile.on_update -> set_defaults -> clear_default("is_pos"), which
-        # is a keyed DELETE across the small, global tabDefaultValue. Paying that
-        # on all twelve tests is what made this class deadlock intermittently.
+        # Reuse the profile when one is already there. Inserting a POS Profile
+        # fires POSProfile.on_update -> set_defaults -> clear_default("is_pos"),
+        # which is a keyed DELETE across the small, global tabDefaultValue.
+        # Paying that on all twelve tests is what made this class deadlock
+        # intermittently.
         if frappe.db.exists("POS Profile", POS_PROFILE):
             pos_profile = frappe.get_doc("POS Profile", POS_PROFILE)
         else:
-            pos_profile = make_pos_profile(
-                company=POS_COMPANY,
-                cost_center="Main - WP",
-                currency="USD",
-                expense_account="Cost of Goods Sold - WP",
-                income_account="Sales - WP",
-                selling_price_list="Standard Selling",
-                territory="United States",
-                warehouse="Stores - WP",
-                write_off_account="Write Off - WP",
-                write_off_cost_center="Main - WP",
-            )
+            pos_profile = _make_suite_pos_profile()
         self.pos_profile = pos_profile.name
 
         # These tests are about POS Invoice payments, so POS has to be in POS
@@ -102,15 +90,21 @@ class TestMpesaSettings(FrappeTestCase):
         # once. A shift committed by an earlier run therefore goes stale at
         # midnight and takes the whole suite red with it. Retire whatever is
         # lying around, then open today's.
+        #
+        # Only this suite's cashier's shifts are retired - on any till, since
+        # one left open elsewhere by an older run blocks a new one here - and
+        # never anyone else's.
         today = frappe.utils.today()
         shift_for_today = None
         for entry in frappe.get_all(
             "POS Opening Entry",
-            filters={"pos_profile": pos_profile.name, "status": "Open"},
-            fields=["name", "period_start_date"],
+            filters={"user": _test_cashier(), "status": "Open"},
+            fields=["name", "pos_profile", "period_start_date"],
         ):
-            if shift_for_today is None and (
-                frappe.utils.get_date_str(entry.period_start_date) == today
+            if (
+                shift_for_today is None
+                and entry.pos_profile == pos_profile.name
+                and frappe.utils.get_date_str(entry.period_start_date) == today
             ):
                 shift_for_today = entry.name
             else:
@@ -732,6 +726,42 @@ def _ensure_mode_of_payment_account(
         doc.save(ignore_permissions=True)
 
     return account
+
+
+def _make_suite_pos_profile():
+    """POS_PROFILE, built as erpnext's make_pos_profile builds its own.
+
+    Not make_pos_profile itself: it deletes every POS Profile on the site
+    before inserting, which is harmless on a throwaway test site and wipes a
+    working one's tills.
+    """
+    _ensure_mode_of_payment_account("Cash", POS_COMPANY, "Sales - WP")
+    pos_profile = frappe.get_doc(
+        {
+            "doctype": "POS Profile",
+            "name": POS_PROFILE,
+            "company": POS_COMPANY,
+            "cost_center": "Main - WP",
+            "currency": "USD",
+            "expense_account": "Cost of Goods Sold - WP",
+            "income_account": "Sales - WP",
+            "selling_price_list": "Standard Selling",
+            "territory": "United States",
+            "customer_group": frappe.db.get_value(
+                "Customer Group", {"is_group": 0}, "name"
+            ),
+            "warehouse": "Stores - WP",
+            "write_off_account": "Write Off - WP",
+            "write_off_cost_center": "Main - WP",
+            "payments": [{"mode_of_payment": "Cash", "default": 1}],
+        }
+    )
+    # erpnext's test site carries a Location accounting dimension; set it only
+    # where the field exists.
+    if pos_profile.meta.has_field("location"):
+        pos_profile.location = "Block 1"
+    pos_profile.insert(ignore_permissions=True)
+    return pos_profile
 
 
 def _test_cashier() -> str:
