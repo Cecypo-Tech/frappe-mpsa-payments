@@ -4,6 +4,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from .m_pesa_api import (
+    MpesaTokenError,
     confirmation,
     get_mpesa_draft_c2b_payments,
     get_mpesa_mode_of_payment,
@@ -28,6 +29,54 @@ class TestMPesaAPI(FrappeTestCase):
         token = get_token(app_key, app_secret, base_url)
 
         self.assertEqual(token, "dummy_token")
+
+    @patch("requests.get")
+    def test_get_token_turns_an_empty_400_into_a_readable_error(self, mock_get):
+        """Safaricom answers a wrong key or secret with an empty text/plain 400.
+
+        get_token used to call .json() on it regardless, and the JSONDecodeError
+        escaped as an HTTP 500 the desk could only show as a bare "Not Saved".
+        """
+        refusal = Mock(status_code=400, text="", headers={"content-type": "text/plain"})
+        refusal.json.side_effect = ValueError("Expecting value")
+        mock_get.return_value = refusal
+
+        with self.assertRaises(MpesaTokenError) as caught:
+            get_token("bad_key", "bad_secret", "https://sandbox.safaricom.co.ke")
+
+        self.assertIn("400", str(caught.exception))
+
+    @patch("requests.get")
+    def test_get_token_surfaces_safaricoms_own_error_message(self, mock_get):
+        refusal = Mock(status_code=400, headers={"content-type": "application/json"})
+        refusal.json.return_value = {
+            "requestId": "1",
+            "errorCode": "400.008.01",
+            "errorMessage": "Invalid Authentication passed",
+        }
+        mock_get.return_value = refusal
+
+        with self.assertRaises(MpesaTokenError) as caught:
+            get_token("bad_key", "bad_secret", "https://api.safaricom.co.ke")
+
+        self.assertIn("Invalid Authentication passed", str(caught.exception))
+
+    @patch("requests.get")
+    def test_get_token_names_an_html_block_page_for_what_it_is(self, mock_get):
+        """Safaricom sits behind Imperva; a blocked request gets an HTML 403."""
+        block = Mock(
+            status_code=403,
+            text="<html>Request unsuccessful. Incapsula incident ID: 1-2</html>",
+            headers={"content-type": "text/html"},
+        )
+        block.json.side_effect = ValueError("Expecting value")
+        mock_get.return_value = block
+
+        with self.assertRaises(MpesaTokenError) as caught:
+            get_token("key", "secret", "https://api.safaricom.co.ke")
+
+        self.assertIn("403", str(caught.exception))
+        self.assertNotIn("<html>", str(caught.exception))
 
     def test_confirmation(self):
         # Test accepted case

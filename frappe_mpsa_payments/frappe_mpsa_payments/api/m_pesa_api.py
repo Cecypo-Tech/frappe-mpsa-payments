@@ -483,6 +483,10 @@ def sanitize_mobile_number(number: str) -> str:
     return "254" + sanitized_number
 
 
+class MpesaTokenError(frappe.ValidationError):
+    """Safaricom's OAuth endpoint did not hand back an access token."""
+
+
 def get_token(app_key, app_secret, base_url):
     authenticate_uri = "/oauth/v1/generate?grant_type=client_credentials"
     authenticate_url = "{0}{1}".format(base_url, authenticate_uri)
@@ -493,7 +497,41 @@ def get_token(app_key, app_secret, base_url):
         timeout=DEFAULT_TIMEOUT,
     )
 
-    return r.json()["access_token"]
+    # Safaricom answers a wrong key or secret with an empty text/plain 400,
+    # and its Imperva front door answers a blocked request with an HTML 403.
+    # Decoding either used to raise JSONDecodeError straight out of a form
+    # save, which the desk can only show as "Not Saved".
+    try:
+        body = r.json()
+    except ValueError:
+        body = None
+
+    token = body.get("access_token") if isinstance(body, dict) else None
+    if token:
+        return token
+
+    if isinstance(body, dict):
+        detail = body.get("errorMessage") or json.dumps(body)
+    else:
+        content_type = (r.headers.get("content-type") or "").split(";")[0].strip()
+        if content_type == "text/html":
+            detail = _(
+                "an HTML page instead of a token, so a firewall or proxy answered"
+            )
+        else:
+            detail = _("no usable body ({0})").format(
+                content_type or _("no content type")
+            )
+
+    frappe.throw(
+        _(
+            "Safaricom did not issue an access token (HTTP {0}): {1}. Check the "
+            "consumer key and secret on the Mpesa Settings, and that the Sandbox "
+            "flag matches the environment they were issued for."
+        ).format(r.status_code, detail),
+        MpesaTokenError,
+        title=_("M-Pesa Authentication Failed"),
+    )
 
 
 @frappe.whitelist(allow_guest=True)

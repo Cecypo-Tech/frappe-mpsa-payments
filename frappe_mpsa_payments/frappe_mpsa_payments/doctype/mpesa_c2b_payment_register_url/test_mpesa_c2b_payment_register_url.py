@@ -7,11 +7,29 @@ import frappe
 import requests
 from frappe.tests.utils import FrappeTestCase
 
+from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import MpesaTokenError
+
 from ..mpesa_settings.test_mpesa_settings import create_mpesa_settings
 
 test_dependencies = ["Company"]
 
 SETTINGS = "_Test Register URL"
+GET_TOKEN = (
+    "frappe_mpsa_payments.frappe_mpsa_payments.doctype"
+    ".mpesa_c2b_payment_register_url"
+    ".mpesa_c2b_payment_register_url.get_token"
+)
+PRODUCT_MISMATCH = {
+    "requestId": "1",
+    "errorCode": "401.003.01",
+    "errorMessage": "Error Occurred - No apiproduct match found",
+}
+
+
+def _reply(body, status_code=200):
+    response = Mock(status_code=status_code)
+    response.json.return_value = body
+    return response
 
 
 class TestMpesaC2BPaymentRegisterURL(FrappeTestCase):
@@ -40,17 +58,85 @@ class TestMpesaC2BPaymentRegisterURL(FrappeTestCase):
     def _register(self, post):
         """Run validate with requests.post standing in for Safaricom."""
         with (
-            patch(
-                "frappe_mpsa_payments.frappe_mpsa_payments.doctype"
-                ".mpesa_c2b_payment_register_url"
-                ".mpesa_c2b_payment_register_url.get_token",
-                return_value="test_token",
-            ),
-            patch("requests.post", **post),
+            patch(GET_TOKEN, return_value="test_token"),
+            patch("requests.post", **post) as mocked_post,
         ):
             self.register_url.validate()
 
+        self.posted_urls = [call.args[0] for call in mocked_post.call_args_list]
         return self.register_url.register_status
+
+    def test_a_token_refusal_is_a_readable_error_not_a_500(self):
+        """The bug as reported: save returned 500 {"exc_type":"JSONDecodeError"}.
+
+        Safaricom answers a wrong key or secret with an empty 400, and get_token
+        blew up decoding it. The user must see why, and Safaricom must not be
+        asked to register anything without a token.
+        """
+        refusal = Mock(status_code=400, text="", headers={"content-type": "text/plain"})
+        refusal.json.side_effect = ValueError("Expecting value")
+
+        with (
+            patch("requests.get", return_value=refusal),
+            patch("requests.post") as mocked_post,
+        ):
+            with self.assertRaises(MpesaTokenError):
+                self.register_url.validate()
+
+        mocked_post.assert_not_called()
+
+    def test_a_v2_product_mismatch_falls_back_to_v1(self):
+        """An app not subscribed to the v2 product gets 401.003.01 from v2."""
+        status = self._register(
+            {
+                "side_effect": [
+                    _reply(PRODUCT_MISMATCH),
+                    _reply({"ResponseDescription": "Success"}),
+                ]
+            }
+        )
+
+        self.assertEqual(status, "Success")
+        self.assertEqual(
+            [url.rsplit("/", 2)[-2] for url in self.posted_urls], ["v2", "v1"]
+        )
+
+    def test_a_v2_product_mismatch_raised_as_an_http_error_falls_back_to_v1(self):
+        error = requests.exceptions.HTTPError("401 Client Error")
+        error.response = _reply(PRODUCT_MISMATCH, status_code=401)
+        error.response.content = b'{"errorCode": "401.003.01"}'
+
+        status = self._register(
+            {"side_effect": [error, _reply({"ResponseDescription": "Success"})]}
+        )
+
+        self.assertEqual(status, "Success")
+        self.assertEqual(
+            [url.rsplit("/", 2)[-2] for url in self.posted_urls], ["v2", "v1"]
+        )
+
+    def test_a_v1_product_mismatch_is_a_failure_not_a_loop(self):
+        frappe.local.message_log = []
+
+        status = self._register(
+            {"side_effect": [_reply(PRODUCT_MISMATCH), _reply(PRODUCT_MISMATCH)]}
+        )
+
+        self.assertEqual(status, "Failed")
+        self.assertEqual(len(self.posted_urls), 2)
+        self.assertTrue(
+            any("401.003.01" in str(m) for m in frappe.local.message_log),
+            "the user must be told why neither version took the registration",
+        )
+
+    def test_an_ordinary_v2_refusal_does_not_retry_on_v1(self):
+        """Only a product mismatch says anything about the API version."""
+        status = self._register(
+            {"side_effect": [_reply({"ResponseDescription": "Failure"})]}
+        )
+
+        self.assertEqual(status, "Failed")
+        self.assertEqual(len(self.posted_urls), 1)
 
     def test_safaricom_accepting_the_registration_is_recorded(self):
         response = Mock(status_code=200)
