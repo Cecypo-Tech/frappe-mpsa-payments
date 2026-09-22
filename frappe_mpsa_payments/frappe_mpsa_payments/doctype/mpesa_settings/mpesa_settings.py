@@ -842,9 +842,10 @@ def bulk_register_pull_transactions(
 
     try:
         callback_url = build_callback_url(PULL_REGISTRATION_CALLBACK)
-    except RuntimeError:
+    except (RuntimeError, AttributeError):
         # build_callback_url reads the request Host header and raises
-        # "object is not bound" with no request. Better to stop here than to
+        # "object is not bound" (AttributeError from Frappe 16.34) with no
+        # request. Better to stop here than to
         # register 60+ shortcodes against a guessed hostname we cannot correct.
         frappe.throw(
             _(

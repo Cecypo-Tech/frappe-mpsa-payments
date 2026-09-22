@@ -173,13 +173,15 @@ def create_payment_gateway_account(gateway, payment_channel="Email", company=Non
 def site_address() -> str:
     """The site's public address, with or without a request behind us.
 
-    get_request_site_address reads the Host header and raises outright when
-    there is none - a scheduled sweep, a bench command, a test - so fall back
-    to the address frappe derives from site config.
+    get_request_site_address reads the request headers and raises outright
+    when there is no request - a scheduled sweep, a bench command, a test - so
+    fall back to the address frappe derives from site config. Frappe raised
+    RuntimeError for the unbound request proxy until 16.34, and AttributeError
+    from then on.
     """
     try:
         return get_request_site_address(True)
-    except RuntimeError:
+    except (RuntimeError, AttributeError):
         return frappe.utils.get_url()
 
 
