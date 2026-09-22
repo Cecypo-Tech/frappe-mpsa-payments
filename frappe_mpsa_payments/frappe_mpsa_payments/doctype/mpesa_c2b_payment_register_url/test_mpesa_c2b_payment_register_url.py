@@ -66,6 +66,29 @@ class TestMpesaC2BPaymentRegisterURL(FrappeTestCase):
         self.posted_urls = [call.args[0] for call in mocked_post.call_args_list]
         return self.register_url.register_status
 
+    def test_the_callback_urls_carry_no_port(self):
+        """frappe.utils.get_url appends the http_port on a non-production bench,
+        giving https://host:443/... - and a production C2B registration is
+        one-shot, so a URL Safaricom dislikes cannot be corrected afterwards.
+        The pull registration already strips it via build_callback_url.
+        """
+        with (
+            patch(GET_TOKEN, return_value="test_token"),
+            patch(
+                "frappe_mpsa_payments.utils.utils.site_address",
+                return_value="https://pay.example.com:443",
+            ),
+            patch(
+                "requests.post", return_value=_reply({"ResponseDescription": "Success"})
+            ) as mocked_post,
+        ):
+            self.register_url.validate()
+
+        api = "https://pay.example.com/api/method/frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api"
+        payload = mocked_post.call_args.kwargs["json"]
+        self.assertEqual(payload["ConfirmationURL"], f"{api}.confirmation")
+        self.assertEqual(payload["ValidationURL"], f"{api}.validation")
+
     def test_a_token_refusal_is_a_readable_error_not_a_500(self):
         """The bug as reported: save returned 500 {"exc_type":"JSONDecodeError"}.
 

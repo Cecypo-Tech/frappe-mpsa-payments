@@ -12,8 +12,9 @@ from frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api import get_token
 from frappe_mpsa_payments.frappe_mpsa_payments.connectors.connectors import (
     DEFAULT_TIMEOUT,
 )
-from frappe_mpsa_payments.utils.utils import site_address
+from frappe_mpsa_payments.utils.utils import build_callback_url
 
+CALLBACK_MODULE = "frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api"
 API_VERSIONS = ("v2", "v1")
 PRODUCT_MISMATCH_ERROR_CODE = "401.003.01"
 
@@ -44,17 +45,11 @@ class MpesaC2BPaymentRegisterURL(Document):
             base_url=base_url,
         )
 
-        site_url = site_address()
-        validation_url = (
-            # site_url + "/api/method/payments.payment_gateways.doctype.mpesa_c2b_payment_register_url.mpesa_api.validation"
-            site_url
-            + "/api/method/frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.validation"
-        )
-        confirmation_url = (
-            # site_url + "/api/method/payments.payment_gateways.doctype.mpesa_c2b_payment_register_url.mpesa_api.confirmation"
-            site_url
-            + "/api/method/frappe_mpsa_payments.frappe_mpsa_payments.api.m_pesa_api.confirmation"
-        )
+        # build_callback_url drops the port frappe.utils.get_url appends on a
+        # non-production bench (https://host:443/...). A production C2B
+        # registration is one-shot, so the URL has to be right first time.
+        validation_url = build_callback_url(f"{CALLBACK_MODULE}.validation")
+        confirmation_url = build_callback_url(f"{CALLBACK_MODULE}.confirmation")
 
         payload = {
             "ShortCode": business_shortcode,
