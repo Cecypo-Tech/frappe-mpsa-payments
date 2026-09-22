@@ -361,6 +361,23 @@ class TestMpesaSettings(FrappeTestCase):
         self.assertEqual(result["status"], "success")
         self.assertIn("Accept", result["message"])
 
+    def test_bulk_pull_registration_refuses_to_run_without_a_request(self):
+        """The test runner has no request, like a bench command or a job.
+
+        The guard used to catch the exception build_callback_url raised with
+        no request; site_address swallows that and hands back a guessed
+        hostname, so the guard never fired and 60+ irreversible registrations
+        could go out against it. It now checks for the request itself.
+        """
+        from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_settings.mpesa_settings import (
+            bulk_register_pull_transactions,
+        )
+
+        with self.assertRaises(frappe.ValidationError) as caught:
+            bulk_register_pull_transactions(settings_names=["_Test"], dry_run=1)
+
+        self.assertIn("web interface", str(caught.exception))
+
     def test_pull_transaction_on_success_creates_c2b_records(self):
         from frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_response_handler import (
             pull_transaction_on_success,

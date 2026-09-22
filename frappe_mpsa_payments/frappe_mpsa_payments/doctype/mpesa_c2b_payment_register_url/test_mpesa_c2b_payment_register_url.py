@@ -184,6 +184,12 @@ class TestMpesaC2BPaymentRegisterURL(FrappeTestCase):
 
         self.assertEqual(self._register({"side_effect": error}), "Failed")
 
+    def test_an_http_error_without_a_response_is_still_a_failure(self):
+        error = requests.exceptions.HTTPError("no response attached")
+        error.response = None
+
+        self.assertEqual(self._register({"side_effect": error}), "Failed")
+
     def test_a_connection_error_is_recorded_as_a_failure(self):
         self.assertEqual(
             self._register(

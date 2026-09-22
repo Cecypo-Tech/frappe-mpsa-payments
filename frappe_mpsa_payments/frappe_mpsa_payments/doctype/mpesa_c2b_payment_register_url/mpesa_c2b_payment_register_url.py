@@ -96,7 +96,9 @@ class MpesaC2BPaymentRegisterURL(Document):
         except requests.exceptions.HTTPError as errh:
             if is_product_mismatch(_json_or_none(errh.response)):
                 return PRODUCT_MISMATCH
-            frappe.msgprint(f"Response Content: {errh.response.content}")
+            frappe.msgprint(
+                f"Response Content: {getattr(errh.response, 'content', errh)}"
+            )
             return FAILED
         except requests.exceptions.ConnectionError as errc:
             frappe.msgprint(f"Error Connecting: {errc}")

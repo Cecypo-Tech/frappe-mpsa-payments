@@ -491,11 +491,18 @@ def get_token(app_key, app_secret, base_url):
     authenticate_uri = "/oauth/v1/generate?grant_type=client_credentials"
     authenticate_url = "{0}{1}".format(base_url, authenticate_uri)
 
-    r = requests.get(
-        authenticate_url,
-        auth=HTTPBasicAuth(app_key, app_secret),
-        timeout=DEFAULT_TIMEOUT,
-    )
+    try:
+        r = requests.get(
+            authenticate_url,
+            auth=HTTPBasicAuth(app_key, app_secret),
+            timeout=DEFAULT_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as err:
+        frappe.throw(
+            _("Could not reach Safaricom for an access token: {0}").format(err),
+            MpesaTokenError,
+            title=_("M-Pesa Authentication Failed"),
+        )
 
     # Safaricom answers a wrong key or secret with an empty text/plain 400,
     # and its Imperva front door answers a blocked request with an HTML 403.

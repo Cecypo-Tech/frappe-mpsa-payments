@@ -840,13 +840,10 @@ def bulk_register_pull_transactions(
     if not settings_names:
         return {"status": "error", "message": _("No Mpesa Settings to register.")}
 
-    try:
-        callback_url = build_callback_url(PULL_REGISTRATION_CALLBACK)
-    except (RuntimeError, AttributeError):
-        # build_callback_url reads the request Host header and raises
-        # "object is not bound" (AttributeError from Frappe 16.34) with no
-        # request. Better to stop here than to
-        # register 60+ shortcodes against a guessed hostname we cannot correct.
+    if not getattr(frappe.local, "request", None):
+        # build_callback_url falls back to a hostname guessed from site config
+        # when there is no request. Better to stop here than to register 60+
+        # shortcodes against a guess we cannot correct.
         frappe.throw(
             _(
                 "Bulk pull registration must be run from the web interface so the "
@@ -854,6 +851,8 @@ def bulk_register_pull_transactions(
                 "undone, so it will not run with a guessed hostname."
             )
         )
+
+    callback_url = build_callback_url(PULL_REGISTRATION_CALLBACK)
 
     if frappe.utils.cint(dry_run):
         return {

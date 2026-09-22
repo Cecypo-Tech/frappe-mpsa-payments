@@ -1,6 +1,7 @@
 # Copyright (c) 2026, Cecypo Tech and Contributors
 # See license.txt
 
+import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from frappe_mpsa_payments.utils.utils import site_address
@@ -14,4 +15,4 @@ class TestSiteAddress(FrappeTestCase):
         rather than RuntimeError, which slipped past the fallback and took the
         C2B register-URL save down with it.
         """
-        self.assertTrue(site_address().startswith("http"))
+        self.assertEqual(site_address(), frappe.utils.get_url())

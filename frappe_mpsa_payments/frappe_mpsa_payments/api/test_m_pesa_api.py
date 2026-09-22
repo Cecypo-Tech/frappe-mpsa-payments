@@ -1,6 +1,7 @@
 from unittest.mock import Mock, patch
 
 import frappe
+import requests
 from frappe.tests.utils import FrappeTestCase
 
 from .m_pesa_api import (
@@ -60,6 +61,16 @@ class TestMPesaAPI(FrappeTestCase):
             get_token("bad_key", "bad_secret", "https://api.safaricom.co.ke")
 
         self.assertIn("Invalid Authentication passed", str(caught.exception))
+
+    @patch("requests.get")
+    def test_get_token_turns_a_transport_error_into_a_readable_error(self, mock_get):
+        """A timeout or refused connection is as much "no token" as a 400."""
+        mock_get.side_effect = requests.exceptions.ConnectionError("no route to host")
+
+        with self.assertRaises(MpesaTokenError) as caught:
+            get_token("key", "secret", "https://api.safaricom.co.ke")
+
+        self.assertIn("no route to host", str(caught.exception))
 
     @patch("requests.get")
     def test_get_token_names_an_html_block_page_for_what_it_is(self, mock_get):
