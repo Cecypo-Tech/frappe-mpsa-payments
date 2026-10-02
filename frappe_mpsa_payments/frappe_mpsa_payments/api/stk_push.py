@@ -82,6 +82,20 @@ def create_stk_push_request(
     prevent_dup = _to_bool(prevent_duplicates)
 
     if prevent_dup and account_reference:
+        paid = frappe.db.get_value(
+            "Mpesa Express Request",
+            {"status": "Completed", "account_reference": account_reference},
+            "name",
+        )
+        if paid:
+            # The money is in: another prompt would charge the customer twice.
+            frappe.throw(
+                _(
+                    "M-Pesa request {0} for {1} was already paid. Submit the sale instead of "
+                    "asking again."
+                ).format(paid, account_reference)
+            )
+
         pending = frappe.get_all(
             "Mpesa Express Request",
             filters={"status": "In Progress", "account_reference": account_reference},

@@ -90,3 +90,14 @@ class TestStkPushReuse(FrappeTestCase):
 
         self.assertFalse(result["duplicate_prevented"])
         self.assertEqual(result["amount"], 4)
+
+    def test_a_sale_already_paid_is_not_asked_again(self):
+        """A paid push means the money is in: another prompt would charge the customer twice."""
+        frappe.db.set_value(
+            "Mpesa Express Request",
+            "_Test STK Pending",
+            {"status": "Completed", "transaction_id": "TEST1"},
+        )
+
+        with self.assertRaisesRegex(frappe.ValidationError, "already paid"):
+            self._push(560)
