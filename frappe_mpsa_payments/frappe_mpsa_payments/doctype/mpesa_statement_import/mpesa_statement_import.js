@@ -7,11 +7,14 @@ frappe.ui.form.on("Mpesa Statement Import", {
 
 		// Submitting creates the payments, so it says so and asks first,
 		// instead of Frappe's generic "Permanently Submit?".
-		if (frm.doc.docstatus === 0 && !frm.is_new() && !frm.is_dirty() && frm.perm[0]?.submit) {
-			frm.page.set_primary_action(
-				__("Import {0} Payments", [frm.doc.payment_rows || 0]),
-				() => confirm_import(frm)
-			);
+		if (
+			frm.doc.docstatus === 0 &&
+			!frm.is_new() &&
+			!frm.is_dirty() &&
+			frm.perm[0]?.submit &&
+			!frappe.model.has_workflow(frm.doctype)
+		) {
+			frm.page.set_primary_action(__("Import Payments"), () => confirm_import(frm));
 		}
 
 		if (frm.doc.docstatus === 1) {
@@ -84,58 +87,70 @@ function show_result_summary(frm) {
 }
 
 function confirm_import(frm) {
-	frm.call("get_import_preview").then(({ message: preview }) => {
-		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
-		const rows = [
-			[__("Shortcode"), esc(preview.business_shortcode)],
-			[__("Company"), esc(preview.company)],
-			[__("Mode of Payment"), esc(preview.mode_of_payment)],
-			[__("Period"), esc(preview.statement_period)],
-			[
-				__("Payments"),
-				`${esc(preview.payment_count)} &middot; ${format_currency(preview.payment_total, "KES")}`,
-			],
-			[__("Withdrawals to bank"), esc(preview.bank_withdrawal_count)],
-			[__("Not imported"), esc(preview.ignored_count)],
-		]
-			.map(([label, value]) => `<tr><th>${label}</th><td>${value}</td></tr>`)
-			.join("");
+	// Frozen while it loads, so a double click cannot open two dialogs.
+	frm.call({ method: "get_import_preview", doc: frm.doc, freeze: true }).then(
+		({ message: preview }) => show_import_dialog(frm, preview)
+	);
+}
 
-		const posting = preview.auto_reconcile
-			? `<p class="text-warning">${__(
-					"Auto-reconcile is on for {0}: each payment posts a Payment Entry as soon as it is created.",
-					[esc(preview.business_shortcode)]
-			  )}</p>`
-			: `<p class="text-muted">${__(
-					"Auto-reconcile is off for {0}: the payments are created as drafts in the Mpesa C2B Payment Register.",
-					[esc(preview.business_shortcode)]
-			  )}</p>`;
+function show_import_dialog(frm, preview) {
+	const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+	const rows = [
+		[__("Shortcode"), esc(preview.business_shortcode)],
+		[__("Company"), esc(preview.company)],
+		[__("Mode of Payment"), esc(preview.mode_of_payment)],
+		[__("Period"), esc(preview.statement_period)],
+		[
+			__("New payments"),
+			`<b>${esc(preview.new_count)}</b> &middot; ${format_currency(
+				preview.new_total,
+				"KES"
+			)}`,
+		],
+		[__("Already imported (skipped)"), esc(preview.already_present)],
+		[__("Captured by an STK push (skipped)"), esc(preview.stk_captured)],
+		[__("Withdrawals to bank"), esc(preview.bank_withdrawal_count)],
+		[__("Not imported"), esc(preview.ignored_count)],
+	]
+		.map(([label, value]) => `<tr><th>${label}</th><td>${value}</td></tr>`)
+		.join("");
 
-		const dialog = new frappe.ui.Dialog({
-			title: __("Import Payments?"),
-			fields: [
-				{
-					fieldtype: "HTML",
-					options: `<table class="table table-bordered table-sm">${rows}</table>${posting}`,
-				},
-			],
-			primary_action_label: __("Create Payments"),
-			primary_action() {
-				dialog.hide();
-				// frm.save runs the submit; savesubmit would ask a second time.
-				frm.save("Submit", (r) => {
-					if (!r.exc) {
-						frm.script_manager.trigger("on_submit");
-					}
-				});
+	const posting = preview.auto_reconcile
+		? `<p class="text-warning">${__(
+				"Auto-reconcile is on for {0}: each new payment posts a Payment Entry as soon as it is created and its customer is matched.",
+				[esc(preview.business_shortcode)]
+		  )}</p>`
+		: `<p class="text-muted">${__(
+				"Auto-reconcile is off for {0}: the payments are created as drafts in the Mpesa C2B Payment Register.",
+				[esc(preview.business_shortcode)]
+		  )}</p>`;
+
+	const dialog = new frappe.ui.Dialog({
+		title: __("Import Payments?"),
+		fields: [
+			{
+				fieldtype: "HTML",
+				options: `<table class="table table-bordered table-sm">${rows}</table>${posting}`,
 			},
-			secondary_action_label: __("Cancel"),
-			secondary_action() {
-				dialog.hide();
-			},
-		});
-		dialog.show();
+		],
+		primary_action_label: preview.new_count
+			? __("Create {0} Payments", [preview.new_count])
+			: __("Submit Import"),
+		primary_action() {
+			dialog.hide();
+			// frm.save runs the submit; savesubmit would ask a second time.
+			frm.save("Submit", (r) => {
+				if (!r.exc) {
+					frm.script_manager.trigger("on_submit");
+				}
+			});
+		},
+		secondary_action_label: __("Cancel"),
+		secondary_action() {
+			dialog.hide();
+		},
 	});
+	dialog.show();
 }
 
 function open_bank_transfer_dialog(frm) {

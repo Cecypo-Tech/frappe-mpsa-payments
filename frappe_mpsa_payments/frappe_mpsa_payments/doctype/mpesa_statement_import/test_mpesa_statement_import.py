@@ -259,6 +259,8 @@ class TestMpesaStatementImport(FrappeTestCase):
             doc.insert()
 
     def test_submit_checks_the_registration_again(self):
+        # Frappe runs validate on submit, so a registration that failed after
+        # the draft was saved still stops the import.
         doc = self._new_import().insert()
         frappe.db.set_value(
             "Mpesa C2B Payment Register URL", SHORTCODE, "register_status", "Failed"
@@ -285,9 +287,56 @@ class TestMpesaStatementImport(FrappeTestCase):
         self.assertFalse(preview["auto_reconcile"])
         self.assertEqual(preview["statement_period"], "2020-01-04 to 2020-01-04")
         self.assertEqual(preview["payment_count"], len(make_fixture.NEW_PAYMENTS))
-        self.assertEqual(preview["payment_total"], make_fixture.NEW_TOTAL_PAID_IN)
+        self.assertEqual(preview["new_count"], len(make_fixture.NEW_PAYMENTS))
+        self.assertEqual(preview["new_total"], make_fixture.NEW_TOTAL_PAID_IN)
+        self.assertEqual(preview["already_present"], 0)
+        self.assertEqual(preview["stk_captured"], 0)
         self.assertEqual(preview["bank_withdrawal_count"], 1)
         self.assertEqual(preview["ignored_count"], len(parsed.ignored_rows))
+
+    def test_import_preview_counts_only_payments_it_will_create(self):
+        """Rows the importer skips or blocks are not counted as new."""
+        doc = self._new_import().insert()
+        present, captured = make_fixture.NEW_PAYMENTS[0], make_fixture.NEW_PAYMENTS[1]
+        frappe.get_doc(
+            {
+                "doctype": "Mpesa C2B Payment Register",
+                "name": "_Test Statement Present",
+                "transid": present[0],
+                "businessshortcode": SHORTCODE,
+            }
+        ).db_insert()
+        frappe.get_doc(
+            {
+                "doctype": "Mpesa Express Request",
+                "name": "_Test Statement Captured",
+                "transaction_id": captured[0],
+            }
+        ).db_insert()
+
+        preview = doc.get_import_preview()
+
+        self.assertEqual(preview["already_present"], 1)
+        self.assertEqual(preview["stk_captured"], 1)
+        self.assertEqual(preview["new_count"], len(make_fixture.NEW_PAYMENTS) - 2)
+        self.assertEqual(
+            preview["new_total"],
+            round(make_fixture.NEW_TOTAL_PAID_IN - present[3] - captured[3], 2),
+        )
+
+    def test_import_preview_reports_auto_reconcile(self):
+        frappe.get_doc(
+            {
+                "doctype": "Mpesa Settings",
+                "name": "_Test Statement Settings",
+                "payment_gateway_name": "_Test Statement Settings",
+                "business_shortcode": SHORTCODE,
+                "auto_reconcile_c2b": 1,
+            }
+        ).db_insert()
+        doc = self._new_import().insert()
+
+        self.assertTrue(doc.get_import_preview()["auto_reconcile"])
 
     def test_import_preview_needs_a_draft(self):
         doc = self._submitted_import()

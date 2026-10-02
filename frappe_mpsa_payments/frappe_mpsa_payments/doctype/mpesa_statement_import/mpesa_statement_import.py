@@ -29,7 +29,9 @@ class MpesaStatementImport(Document):
         # typed shortcode has to land there too.
         parsed.business_shortcode = self.business_shortcode
         # Refuse before anything is written: registers for an unregistered
-        # shortcode get no mode of payment and can never be posted.
+        # shortcode get no mode of payment and can never be posted. Frappe
+        # runs validate again on submit, so a registration that failed since
+        # the draft was saved is caught there too.
         _registered_url(self.business_shortcode)
         self.account_holder = parsed.account_holder
         self.statement_period = parsed.statement_period
@@ -96,10 +98,6 @@ class MpesaStatementImport(Document):
         except frappe.exceptions.DuplicateEntryError:
             self._throw_already_imported()
 
-    def before_submit(self):
-        # The registration can change between saving the draft and importing.
-        _registered_url(self.business_shortcode)
-
     def on_submit(self):
         parsed = self._get_parsed()
         parsed.business_shortcode = self.business_shortcode
@@ -121,6 +119,7 @@ class MpesaStatementImport(Document):
     @frappe.whitelist(methods=["POST"])
     def get_import_preview(self) -> dict:
         """What submitting will create, for the form to confirm before it does."""
+        self.check_permission("submit")
         self.reload()
         if self.docstatus != 0:
             frappe.throw(_("This statement has already been imported."))
@@ -128,6 +127,32 @@ class MpesaStatementImport(Document):
         company, mode_of_payment = _registered_url(self.business_shortcode)
         parsed = self._get_parsed()
         payments = parsed.payment_rows or []
+
+        # The importer skips receipts already in the register and blocks those
+        # an STK push captured; only the rest are created.
+        receipts = [row.receipt_no for row in payments]
+        present = set(
+            frappe.get_all(
+                importer.TARGET_DOCTYPE,
+                filters={"transid": ("in", receipts)},
+                pluck="transid",
+            )
+            if receipts
+            else []
+        )
+        captured = (
+            set(
+                frappe.get_all(
+                    importer.EXPRESS_DOCTYPE,
+                    filters={"transaction_id": ("in", receipts)},
+                    pluck="transaction_id",
+                )
+            )
+            - present
+            if receipts
+            else set()
+        )
+        new_rows = [row for row in payments if row.receipt_no not in present | captured]
         return {
             "business_shortcode": self.business_shortcode,
             "company": company,
@@ -144,6 +169,10 @@ class MpesaStatementImport(Document):
             "statement_period": self.statement_period,
             "payment_count": len(payments),
             "payment_total": round(sum(row.amount for row in payments), 2),
+            "new_count": len(new_rows),
+            "new_total": round(sum(row.amount for row in new_rows), 2),
+            "already_present": len(present),
+            "stk_captured": len(captured),
             "bank_withdrawal_count": len(parsed.bank_withdrawals or []),
             "ignored_count": len(parsed.ignored_rows or []),
         }
@@ -385,8 +414,8 @@ def _registered_url(shortcode: str) -> tuple[str, str]:
         frappe.throw(
             _(
                 "Shortcode {0} has no successfully registered Mpesa C2B Payment Register URL "
-                "with a company and mode of payment, so its payments could not be posted. "
-                "Set up Mpesa Settings for {0} and register its URL first."
+                "with a company and mode of payment. Set up Mpesa Settings for {0} and "
+                "register its URL first."
             ).format(shortcode),
             title=_("Shortcode Not Set Up"),
         )
