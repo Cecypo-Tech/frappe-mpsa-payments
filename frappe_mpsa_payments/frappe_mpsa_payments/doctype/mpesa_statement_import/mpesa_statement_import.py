@@ -7,7 +7,7 @@ import json
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import cint, escape_html, fmt_money, get_link_to_form
+from frappe.utils import cint, escape_html, fmt_money, get_datetime, get_link_to_form
 
 from frappe_mpsa_payments import importer
 from frappe_mpsa_payments.statement_parser import StatementParseError, parse_statement
@@ -24,7 +24,7 @@ class MpesaStatementImport(Document):
 
         parsed = self._parse(file_path)
 
-        self.business_shortcode = parsed.business_shortcode
+        self.business_shortcode = self._resolve_shortcode(parsed.business_shortcode)
         self.account_holder = parsed.account_holder
         self.statement_period = parsed.statement_period
         self.total_rows = cint(parsed.total_rows)
@@ -39,6 +39,46 @@ class MpesaStatementImport(Document):
                 ).format(", ".join(sorted(set(parsed.duplicate_receipts)))),
                 title=_("Malformed Statement"),
             )
+
+    def _resolve_shortcode(self, from_file: str) -> str:
+        """The file's shortcode, else the one the user typed; never two different ones.
+
+        The newer statement template carries its shortcode only in the file
+        name, so a renamed file has none and the user types it in.
+        """
+        typed = (self.business_shortcode or "").strip()
+
+        # A value left over from the previously attached file was not typed.
+        before = self.get_doc_before_save()
+        if (
+            before
+            and before.statement_file != self.statement_file
+            and typed == (before.business_shortcode or "").strip()
+        ):
+            typed = ""
+
+        from_file = (from_file or "").strip()
+        if from_file and typed and typed != from_file:
+            frappe.throw(
+                _(
+                    "This statement is for shortcode {0}, but {1} was entered. "
+                    "Clear the Business Shortcode, or attach the statement for {1}."
+                ).format(from_file, typed),
+                title=_("Shortcode Mismatch"),
+            )
+
+        shortcode = from_file or typed
+        if not shortcode:
+            frappe.throw(
+                _(
+                    "The business shortcode could not be read from this statement. "
+                    "Statements named like 'Statements for 123456 from ...' carry it in "
+                    "the file name; this file has been renamed. Enter the Business "
+                    "Shortcode and save again."
+                ),
+                title=_("Business Shortcode Needed"),
+            )
+        return shortcode
 
     def db_insert(self, *args, **kwargs):
         """Turn the unique-index violation on ``file_hash`` into a human message."""
@@ -65,6 +105,99 @@ class MpesaStatementImport(Document):
         _log_run(self, parsed, result)
 
     # ------------------------------------------------------------------
+    # Bank transfer
+    # ------------------------------------------------------------------
+
+    @frappe.whitelist()
+    def get_bank_transfer_context(self) -> dict:
+        """What the Create Bank Transfer dialog needs to show and filter on."""
+        self._check_can_transfer()
+        withdrawals = self._get_parsed().bank_withdrawals
+        if not withdrawals:
+            return {"withdrawals": []}
+
+        company, mode_of_payment, paid_from = _mpesa_account(self.business_shortcode)
+        return {
+            "company": company,
+            "mode_of_payment": mode_of_payment,
+            "paid_from": paid_from,
+            "withdrawals": [
+                {
+                    "receipt_no": w.receipt_no,
+                    "completion_time": w.completion_time,
+                    "amount": w.amount,
+                    "details": w.details,
+                    "payment_entry": _existing_transfer(company, w.receipt_no),
+                }
+                for w in withdrawals
+            ],
+        }
+
+    @frappe.whitelist()
+    def create_bank_transfer(self, bank_account: str) -> list[dict]:
+        """Draft one Internal Transfer per withdrawal-to-bank row.
+
+        Drafts, not submitted: the user chose the bank and should check the
+        entry before it posts.  A receipt that already has a non-cancelled
+        Internal Transfer is returned as-is, so clicking twice is harmless.
+        """
+        self._check_can_transfer()
+        withdrawals = self._get_parsed().bank_withdrawals
+        if not withdrawals:
+            return []
+
+        company, mode_of_payment, paid_from = _mpesa_account(self.business_shortcode)
+        _check_bank_account(bank_account, company, paid_from)
+
+        results = []
+        for withdrawal in withdrawals:
+            existing = _existing_transfer(company, withdrawal.receipt_no)
+            if existing:
+                results.append({"name": existing, "created": False})
+                continue
+
+            if not withdrawal.completion_time:
+                frappe.throw(
+                    _(
+                        "Could not read the date of withdrawal {0} from the statement."
+                    ).format(withdrawal.receipt_no)
+                )
+            posting = get_datetime(withdrawal.completion_time).date()
+
+            pe = frappe.new_doc("Payment Entry")
+            pe.update(
+                {
+                    "payment_type": "Internal Transfer",
+                    "company": company,
+                    "mode_of_payment": mode_of_payment,
+                    "posting_date": posting,
+                    "paid_from": paid_from,
+                    "paid_to": bank_account,
+                    "paid_amount": withdrawal.amount,
+                    "received_amount": withdrawal.amount,
+                    "reference_no": withdrawal.receipt_no,
+                    "reference_date": posting,
+                    # Without this ERPNext replaces the remark with its own.
+                    "custom_remarks": 1,
+                    "remarks": _("{0} ({1}) from M-Pesa statement import {2}").format(
+                        withdrawal.details, withdrawal.receipt_no, self.name
+                    ),
+                }
+            )
+            pe.insert()
+            results.append({"name": pe.name, "created": True})
+
+        return results
+
+    def _check_can_transfer(self):
+        if self.docstatus != 1:
+            frappe.throw(
+                _(
+                    "Submit this import first, so the payments are in the books before moving the money."
+                )
+            )
+
+    # ------------------------------------------------------------------
     # File handling
     # ------------------------------------------------------------------
 
@@ -84,6 +217,9 @@ class MpesaStatementImport(Document):
                     self.statement_file
                 )
             )
+
+        # The newer template's shortcode is in the name it was uploaded under.
+        self._file_name = file_doc.file_name
 
         # get_full_path() resolves both /files/... (public) and /private/files/...
         path = file_doc.get_full_path()
@@ -105,7 +241,9 @@ class MpesaStatementImport(Document):
 
     def _parse(self, file_path: str):
         try:
-            parsed = parse_statement(file_path)
+            parsed = parse_statement(
+                file_path, original_name=getattr(self, "_file_name", None)
+            )
         except StatementParseError as e:
             frappe.throw(
                 _("This file could not be read as an M-Pesa statement: {0}").format(
@@ -177,6 +315,84 @@ class MpesaStatementImport(Document):
 # ----------------------------------------------------------------------
 
 
+def _mpesa_account(shortcode: str) -> tuple[str, str, str]:
+    """(company, mode_of_payment, account) for the shortcode's M-Pesa ledger.
+
+    Resolved the same way Mpesa C2B Payment Register does: through the
+    successfully registered URL for the shortcode.
+    """
+    registered = frappe.get_all(
+        "Mpesa C2B Payment Register URL",
+        filters={"business_shortcode": shortcode, "register_status": "Success"},
+        fields=["company", "mode_of_payment"],
+        limit=1,
+    )
+    if not registered or not registered[0].company or not registered[0].mode_of_payment:
+        frappe.throw(
+            _(
+                "Shortcode {0} has no successfully registered Mpesa C2B Payment Register URL "
+                "with a company and mode of payment, so the M-Pesa account to transfer "
+                "from is unknown."
+            ).format(shortcode),
+            title=_("M-Pesa Account Unknown"),
+        )
+
+    company, mode_of_payment = registered[0].company, registered[0].mode_of_payment
+    account = frappe.db.get_value(
+        "Mode of Payment Account",
+        {
+            "parenttype": "Mode of Payment",
+            "parent": mode_of_payment,
+            "company": company,
+        },
+        "default_account",
+    )
+    if not account:
+        frappe.throw(
+            _("Mode of Payment {0} has no default account for {1}.").format(
+                get_link_to_form("Mode of Payment", mode_of_payment), company
+            ),
+            title=_("M-Pesa Account Unknown"),
+        )
+    return company, mode_of_payment, account
+
+
+def _check_bank_account(bank_account: str, company: str, paid_from: str):
+    if not bank_account:
+        frappe.throw(_("Select the bank account the money went to."))
+
+    account = frappe.db.get_value(
+        "Account", bank_account, ["company", "is_group", "account_type"], as_dict=True
+    )
+    if not account:
+        frappe.throw(_("Account {0} does not exist.").format(bank_account))
+    if account.company != company:
+        frappe.throw(
+            _("Account {0} does not belong to {1}.").format(bank_account, company)
+        )
+    if account.is_group:
+        frappe.throw(_("Account {0} is a group account.").format(bank_account))
+    if account.account_type not in ("Bank", "Cash"):
+        frappe.throw(_("Account {0} is not a bank account.").format(bank_account))
+    if bank_account == paid_from:
+        frappe.throw(
+            _("{0} is the M-Pesa account itself; pick the bank.").format(bank_account)
+        )
+
+
+def _existing_transfer(company: str, receipt_no: str) -> str | None:
+    return frappe.db.get_value(
+        "Payment Entry",
+        {
+            "company": company,
+            "payment_type": "Internal Transfer",
+            "reference_no": receipt_no,
+            "docstatus": ("<", 2),
+        },
+        "name",
+    )
+
+
 def _sha256(file_path: str) -> str:
     digest = hashlib.sha256()
     with open(file_path, "rb") as f:
@@ -234,7 +450,11 @@ def _render_summary(parsed, result: dict) -> str:
         ).format(unposted)
 
     if not rows:
-        return headline + "<p>No payment rows found in this statement.</p>"
+        return (
+            headline
+            + "<p>No payment rows found in this statement.</p>"
+            + _render_other_rows(parsed)
+        )
 
     return (
         headline
@@ -244,7 +464,53 @@ def _render_summary(parsed, result: dict) -> str:
         + "</tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
+        + _render_other_rows(parsed)
     )
+
+
+def _render_other_rows(parsed) -> str:
+    """Bank withdrawals and the rows deliberately not imported."""
+    html = ""
+
+    withdrawals = getattr(parsed, "bank_withdrawals", None) or []
+    if withdrawals:
+        html += (
+            "<p><b>Withdrawals to bank</b> &mdash; use <i>Create Bank Transfer</i> to draft "
+            "the Payment Entry.</p><table class='table table-bordered'><thead><tr>"
+            "<th>Receipt</th><th>Time</th><th>Amount</th><th>Detail</th></tr></thead><tbody>"
+            + "".join(
+                "<tr>"
+                f"<td>{escape_html(w.receipt_no)}</td>"
+                f"<td>{escape_html(w.completion_time)}</td>"
+                f"<td style='text-align:right'>{escape_html(fmt_money(w.amount, currency='KES'))}</td>"
+                f"<td>{escape_html(w.details)}</td>"
+                "</tr>"
+                for w in withdrawals
+            )
+            + "</tbody></table>"
+        )
+
+    ignored = getattr(parsed, "ignored_rows", None) or []
+    if ignored:
+        html += (
+            "<p><b>Not imported</b> &mdash; Safaricom-internal transfers and any other row "
+            "that is not a customer payment.</p><table class='table table-bordered'><thead><tr>"
+            "<th>Receipt</th><th>Time</th><th>Paid In</th><th>Withdrawn</th><th>Detail</th>"
+            "</tr></thead><tbody>"
+            + "".join(
+                "<tr>"
+                f"<td>{escape_html(i.receipt_no)}</td>"
+                f"<td>{escape_html(i.completion_time)}</td>"
+                f"<td style='text-align:right'>{escape_html(fmt_money(i.paid_in, currency='KES'))}</td>"
+                f"<td style='text-align:right'>{escape_html(fmt_money(i.withdrawn, currency='KES'))}</td>"
+                f"<td>{escape_html(i.details)}</td>"
+                "</tr>"
+                for i in ignored
+            )
+            + "</tbody></table>"
+        )
+
+    return html
 
 
 def _log_run(doc, parsed, result: dict):
@@ -263,6 +529,10 @@ def _log_run(doc, parsed, result: dict):
         "total_rows": parsed.total_rows,
         "payment_rows": len(parsed.payment_rows or []),
         "header_total_paid_in": getattr(parsed, "header_total_paid_in", None),
+        "bank_withdrawals": [
+            vars(w) for w in getattr(parsed, "bank_withdrawals", None) or []
+        ],
+        "ignored_rows": [vars(i) for i in getattr(parsed, "ignored_rows", None) or []],
         "counts": {
             "created": result["created"],
             "skipped": result["skipped"],

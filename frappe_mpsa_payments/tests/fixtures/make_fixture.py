@@ -272,6 +272,244 @@ def write_headerless_xls(path: str) -> str:
     return path
 
 
+# --------------------------------------------------------------------------
+# The newer "Statements for <shortcode> from <date> to <date>" export
+#
+# No preamble: the header is the first row, amounts are text with thousands
+# separators, and the payer, account and transaction type are packed into
+# ``Details``.  Safaricom-internal transfers (Utility -> Settlement ->
+# MMF) appear as Paid In / Withdrawn pairs, and the real money leaving M-Pesa
+# is an "Agency Withdrawal of funds to Bank" row.  All values are fictional.
+# --------------------------------------------------------------------------
+
+NEW_SHORT_CODE = "654321"
+NEW_PERIOD = "2020-01-04 to 2020-01-04"
+NEW_FILE_NAME = f"Statements for {NEW_SHORT_CODE} from 2020-01-04 to 2020-01-04"
+
+NEW_COLUMN_HEADERS = [
+    "Receipt No",
+    "Completion Time",
+    "Details",
+    "Transaction Status",
+    "Paid In (KSHs)",
+    "Withdrawn (KSHs)",
+    "Balance (KSHs)",
+]
+
+#: (receipt, completion, details, amount, expected parse) -- one per Details shape.
+NEW_PAYMENTS = [
+    (
+        "TESTN00001",
+        "04/01/2020 16:15:18",
+        "Pay Bill from 2547****111 - ALICE WANJIRU EXAMPLE Acc. alice",
+        1100.0,
+        {
+            "transactiontype": "Pay Bill",
+            "msisdn": "2547****111",
+            "firstname": "ALICE",
+            "middlename": "WANJIRU",
+            "lastname": "EXAMPLE",
+            "billrefnumber": "alice",
+        },
+    ),
+    (
+        "TESTN00002",
+        "04/01/2020 16:14:48",
+        "Pay Bill Online from 07****222 - Bob Sample Acc. bob shop",
+        1900.0,
+        {
+            "transactiontype": "Pay Bill Online",
+            "msisdn": "07****222",
+            "firstname": "Bob",
+            "middlename": "",
+            "lastname": "Sample",
+            "billrefnumber": "bob shop",
+        },
+    ),
+    (
+        "TESTN00003",
+        "04/01/2020 12:05:20",
+        "Small Business Pay Bill from 2547****333 - CAROL FICTION Acc. Carol",
+        1200.0,
+        {
+            "transactiontype": "Small Business Pay Bill",
+            "msisdn": "2547****333",
+            "firstname": "CAROL",
+            "middlename": "",
+            "lastname": "FICTION",
+            "billrefnumber": "Carol",
+        },
+    ),
+    (
+        "TESTN00004",
+        "04/01/2020 15:45:10",
+        "Merchant Pay Utility Received from 1234567 - FAKE AUTO TECH Acc. dave",
+        2150.0,
+        {
+            "transactiontype": "Merchant Pay Utility Received",
+            "msisdn": "1234567",
+            "firstname": "FAKE",
+            "middlename": "AUTO",
+            "lastname": "TECH",
+            "billrefnumber": "dave",
+        },
+    ),
+    (
+        "TESTN00005",
+        "04/01/2020 14:30:00",
+        "Business Pay Bill via API by 999001 - TEST BANK TO PAYBILL Acc. erin",
+        60840.0,
+        {
+            "transactiontype": "Business Pay Bill via API",
+            "msisdn": "999001",
+            "firstname": "TEST",
+            "middlename": "BANK TO",
+            "lastname": "PAYBILL",
+            "billrefnumber": "erin",
+        },
+    ),
+    (
+        "TESTN00006",
+        "04/01/2020 14:09:17",
+        "FSI to Pay Bill by 999002 - MOCK BANK LTD - BANK TO TILL Acc. Frank "
+        "via WEB by MOCK BANK LTD - BANK TO TILL\\B2BUser1",
+        2350.0,
+        {
+            "transactiontype": "FSI to Pay Bill",
+            "msisdn": "999002",
+            "firstname": "MOCK",
+            "middlename": "BANK LTD - BANK TO",
+            "lastname": "TILL",
+            "billrefnumber": "Frank",
+        },
+    ),
+    (
+        "TESTN00007",
+        "04/01/2020 16:11:41",
+        "Pay Bill from 2547****777 - GRACE NOACC Acc.",
+        1500.0,
+        {
+            "transactiontype": "Pay Bill",
+            "msisdn": "2547****777",
+            "firstname": "GRACE",
+            "middlename": "",
+            "lastname": "NOACC",
+            "billrefnumber": "",
+        },
+    ),
+    (
+        "TESTN00008",
+        "04/01/2020 09:00:00",
+        "Merchant Pay Utility Received from 7654321 - TRAILING SPACE CO  Acc.",
+        530.0,
+        {
+            "transactiontype": "Merchant Pay Utility Received",
+            "msisdn": "7654321",
+            "firstname": "TRAILING",
+            "middlename": "SPACE",
+            "lastname": "CO",
+            "billrefnumber": "",
+        },
+    ),
+]
+
+NEW_TOTAL_PAID_IN = round(sum(payment[3] for payment in NEW_PAYMENTS), 2)
+
+NEW_BANK_WITHDRAWAL = (
+    "TESTNWD001",
+    "04/01/2020 23:09:30",
+    "Agency Withdrawal of funds to Bank",
+)
+
+#: Safaricom-internal sweeps: each is an in/out pair with the same receipt.
+NEW_INTERNAL_TRANSFERS = [
+    (
+        "TESTNIT001",
+        "04/01/2020 23:09:07",
+        "Organization Settlement Account to Organization MMF Account",
+    ),
+    (
+        "TESTNIT002",
+        "04/01/2020 23:09:07",
+        "Utility Account to Organization Settlement Account",
+    ),
+]
+
+
+def _money(value: float) -> str:
+    return f"{value:,.2f}"
+
+
+def build_new_template_rows() -> list[list[str]]:
+    """Header plus data rows, newest first, as the portal emits them."""
+
+    total = NEW_TOTAL_PAID_IN
+    rows: list[list[str]] = [list(NEW_COLUMN_HEADERS)]
+
+    receipt, completion, details = NEW_BANK_WITHDRAWAL
+    rows.append(
+        [receipt, completion, details, "Completed", "0.00", _money(-total), "0.00"]
+    )
+
+    for receipt, completion, details in NEW_INTERNAL_TRANSFERS:
+        rows.append(
+            [
+                receipt,
+                completion,
+                details,
+                "Completed",
+                _money(total),
+                "0.00",
+                _money(total),
+            ]
+        )
+        rows.append(
+            [receipt, completion, details, "Completed", "0.00", _money(-total), "0.00"]
+        )
+
+    balance = total
+    for receipt, completion, details, amount, _expected in NEW_PAYMENTS:
+        rows.append(
+            [
+                receipt,
+                completion,
+                details,
+                "Completed",
+                _money(amount),
+                "0.00",
+                _money(balance),
+            ]
+        )
+        balance = round(balance - amount, 2)
+
+    return rows
+
+
+def write_new_template_csv(path: str) -> str:
+    """Write the new-template fixture as CSV (CRLF, like the portal)."""
+
+    import csv
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerows(build_new_template_rows())
+    return path
+
+
+def write_new_template_xlsx(path: str) -> str:
+    """Write the new-template fixture as .xlsx; every cell is text, like the portal."""
+
+    import openpyxl
+
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = "Statements"
+    for row in build_new_template_rows():
+        sheet.append(row)
+    book.save(path)
+    return path
+
+
 def default_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), FIXTURE_NAME)
 

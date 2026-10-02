@@ -1,4 +1,4 @@
-"""Pure-Python parser for M-Pesa Utility Account statement exports (legacy .xls).
+"""Pure-Python parser for M-Pesa Utility Account statement exports.
 
 This module deliberately does NOT import ``frappe``.  It is a plain library so
 that it can be unit tested without a Frappe site, and so that the importer can
@@ -20,15 +20,40 @@ Critically, every customer payment is emitted **twice** with the same
 ``Withdrawn``) and once as the real payment row (``Paid In`` > 0).  Only the
 latter is a transaction we want to import, so :func:`parse_statement` filters
 to ``Paid In > 0``.
+
+The newer template
+------------------
+The portal also exports ``Statements for <shortcode> from <date> to <date>``
+as ``.csv`` or ``.xlsx``.  It has no preamble (the header is the first row),
+amounts are text such as ``"1,100.00"`` under ``Paid In (KSHs)``, and there
+are no ``Other Party Info`` / ``A/C No.`` / ``Reason Type`` columns -- the
+payer, account and transaction type are packed into ``Details``::
+
+    Pay Bill from 2547****376 - JANE DOE Acc. shop
+
+Safaricom-internal sweeps (``Utility Account to Organization Settlement
+Account`` and so on) appear in this template as ``Paid In`` / ``Withdrawn``
+pairs, so ``Paid In > 0`` alone would import them as customer payments.  In
+this layout a row is a payment only when its ``Details`` has the payment
+shape above; any other row is returned in ``ignored_rows``.  An ``Agency
+Withdrawal of funds to Bank`` row is the money actually leaving M-Pesa and is
+returned in ``bank_withdrawals``.
+
+The shortcode and period are not in the file, so they are read from its
+original name.  The file type is detected from its content, not from its
+extension.
 """
 
 from __future__ import annotations
 
 import datetime
+import os
 import re
 from dataclasses import dataclass, field
 
 __all__ = [
+    "BankWithdrawal",
+    "IgnoredRow",
     "ParsedStatement",
     "StatementParseError",
     "StatementRow",
@@ -59,6 +84,29 @@ class StatementRow:
 
 
 @dataclass
+class BankWithdrawal:
+    """Money leaving M-Pesa for a bank (``... Withdrawal of funds to Bank``)."""
+
+    receipt_no: str = ""
+    completion_time: str = ""
+    amount: float = 0.0
+    details: str = ""
+    row_index: int = -1
+
+
+@dataclass
+class IgnoredRow:
+    """A newer-template row that is neither a payment nor a bank withdrawal."""
+
+    receipt_no: str = ""
+    completion_time: str = ""
+    paid_in: float = 0.0
+    withdrawn: float = 0.0
+    details: str = ""
+    row_index: int = -1
+
+
+@dataclass
 class ParsedStatement:
     """Everything the importer needs from one statement file."""
 
@@ -69,6 +117,8 @@ class ParsedStatement:
     payment_rows: list[StatementRow] = field(default_factory=list)
     header_total_paid_in: float | None = None
     duplicate_receipts: list[str] = field(default_factory=list)
+    bank_withdrawals: list[BankWithdrawal] = field(default_factory=list)
+    ignored_rows: list[IgnoredRow] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -117,6 +167,24 @@ _DATETIME_FORMATS = (
 _WHITESPACE = re.compile(r"\s+")
 _TRAILING_ZERO_FLOAT = re.compile(r"^-?\d+\.0+$")
 
+#: A trailing ``(KSHs)``-style unit on a column header.
+_HEADER_UNIT = re.compile(r"\s*\(([^)]*)\)\s*$")
+
+#: ``<type> from|by <party> - <name> Acc. <account>[ via <channel> by ...]``
+_DETAILS_PAYMENT = re.compile(
+    r"^(?P<type>.+?)\s+(?:from|by)\s+(?P<party>\S+)\s+-\s*(?P<name>.*?)\s*"
+    r"\bAcc\.\s*(?P<account>.*?)(?:\s+via\s+\S+\s+by\s+.*)?\s*$"
+)
+
+_BANK_WITHDRAWAL = re.compile(r"\bto\s+bank\b", re.IGNORECASE)
+
+#: ``Statements for 160745 from 2026-10-01 to 2026-10-01 (1).csv``
+_FILE_NAME_METADATA = re.compile(
+    r"statements?\s+for\s+(?P<shortcode>\d+)\s+from\s+(?P<start>\d{4}-\d{2}-\d{2})"
+    r"\s+to\s+(?P<end>\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
+
 
 def _normalise_key(value: object) -> str:
     """Fold a header/label cell down to a comparison key.
@@ -126,8 +194,17 @@ def _normalise_key(value: object) -> str:
     between statement versions does not break column lookup.
     """
 
-    text = _to_text(value).strip().rstrip(":").casefold()
+    text = _HEADER_UNIT.sub("", _to_text(value).strip().rstrip(":")).casefold()
     return re.sub(r"[^a-z0-9]", "", text)
+
+
+def _header_currency(value: object) -> str:
+    """``"Paid In (KSHs)"`` -> ``"KES"``; anything else -> ``""``."""
+
+    match = _HEADER_UNIT.search(_to_text(value).strip())
+    if match and re.match(r"^(kshs?|kes)$", match.group(1).strip(), re.IGNORECASE):
+        return "KES"
+    return ""
 
 
 def _to_text(value: object) -> str:
@@ -479,8 +556,19 @@ def _parse_sheet(sheet: object) -> ParsedStatement:
         if raw_total != "":
             header_total_paid_in = _to_float(raw_total)
 
+    # The newer template packs payer and account into Details instead of
+    # giving them their own columns.  The legacy layout never takes this path.
+    details_layout = (
+        "details" in columns
+        and "other_party_info" not in columns
+        and "account_no" not in columns
+    )
+    header_currency = _header_currency(_cell(sheet, header_row, columns["paid_in"]))
+
     total_rows = 0
     payment_rows: list[StatementRow] = []
+    bank_withdrawals: list[BankWithdrawal] = []
+    ignored_rows: list[IgnoredRow] = []
 
     for row in range(header_row + 1, sheet.nrows):
         if _row_is_blank(sheet, row):
@@ -489,40 +577,84 @@ def _parse_sheet(sheet: object) -> ParsedStatement:
         total_rows += 1
 
         amount = _to_float(_cell(sheet, row, columns["paid_in"]))
+        details = _WHITESPACE.sub(
+            " ", _to_text(_cell(sheet, row, columns.get("details", -1))).strip()
+        )
+
+        completion_col = columns.get("completion_time", -1)
+        raw_completion = _cell(sheet, row, completion_col)
+        completed_at = _parse_datetime(raw_completion, sheet, row, completion_col)
+        completion_time = (
+            completed_at.strftime("%Y-%m-%d %H:%M:%S") if completed_at else ""
+        )
+
+        withdrawn = _to_float(_cell(sheet, row, columns.get("withdrawn", -1)))
+        if amount <= 0 and withdrawn < 0 and _BANK_WITHDRAWAL.search(details):
+            bank_withdrawals.append(
+                BankWithdrawal(
+                    receipt_no=_to_clean_id(_cell(sheet, row, columns["receipt_no"])),
+                    completion_time=completion_time,
+                    amount=-withdrawn,
+                    details=details,
+                    row_index=row,
+                )
+            )
+            continue
+
+        details_match = _DETAILS_PAYMENT.match(details) if details_layout else None
+        if details_layout and (amount <= 0 or not details_match):
+            # An internal sweep, its outbound twin, or an inflow whose shape we
+            # do not recognise.  Reported, never imported.
+            ignored_rows.append(
+                IgnoredRow(
+                    receipt_no=_to_clean_id(_cell(sheet, row, columns["receipt_no"])),
+                    completion_time=completion_time,
+                    paid_in=amount,
+                    withdrawn=withdrawn,
+                    details=details,
+                    row_index=row,
+                )
+            )
+            continue
+
         if amount <= 0:
             # Either a 'Pay Bill Charge' twin of a real payment, or a
             # settlement/withdrawal row. Neither is an inbound payment.
             continue
 
-        completion_col = columns.get("completion_time", -1)
-        raw_completion = _cell(sheet, row, completion_col)
-        completed_at = _parse_datetime(raw_completion, sheet, row, completion_col)
-
-        msisdn, firstname, middlename, lastname = _split_other_party_info(
-            _cell(sheet, row, columns.get("other_party_info", -1))
-        )
+        if details_match:
+            msisdn, firstname, middlename, lastname = _split_other_party_info(
+                f"{details_match['party']} - {details_match['name']}"
+            )
+            billrefnumber = details_match["account"].strip()
+            transactiontype = details_match["type"].strip()
+        else:
+            msisdn, firstname, middlename, lastname = _split_other_party_info(
+                _cell(sheet, row, columns.get("other_party_info", -1))
+            )
+            billrefnumber = _to_clean_id(
+                _cell(sheet, row, columns.get("account_no", -1))
+            )
+            transactiontype = _to_text(
+                _cell(sheet, row, columns.get("reason_type", -1))
+            ).strip()
 
         payment_rows.append(
             StatementRow(
                 receipt_no=_to_clean_id(_cell(sheet, row, columns["receipt_no"])),
                 transtime=completed_at.strftime("%Y%m%d%H%M%S") if completed_at else "",
-                completion_time=completed_at.strftime("%Y-%m-%d %H:%M:%S")
-                if completed_at
-                else "",
+                completion_time=completion_time,
                 amount=amount,
-                billrefnumber=_to_clean_id(
-                    _cell(sheet, row, columns.get("account_no", -1))
-                ),
-                transactiontype=_to_text(
-                    _cell(sheet, row, columns.get("reason_type", -1))
-                ).strip(),
+                billrefnumber=billrefnumber,
+                transactiontype=transactiontype,
                 msisdn=msisdn,
                 firstname=firstname,
                 middlename=middlename,
                 lastname=lastname,
                 currency=_to_text(
                     _cell(sheet, row, columns.get("currency", -1))
-                ).strip(),
+                ).strip()
+                or header_currency,
                 row_index=row,
             )
         )
@@ -535,6 +667,8 @@ def _parse_sheet(sheet: object) -> ParsedStatement:
         payment_rows=payment_rows,
         header_total_paid_in=header_total_paid_in,
         duplicate_receipts=_find_duplicate_receipts(payment_rows),
+        bank_withdrawals=bank_withdrawals,
+        ignored_rows=ignored_rows,
     )
 
 
@@ -575,13 +709,35 @@ def _select_sheet(book: object):
     return sheets[0]
 
 
-def parse_statement(file_path: str) -> ParsedStatement:
-    """Parse an M-Pesa Utility Account statement export (legacy ``.xls``).
+class _GridSheet:
+    """A sheet built from plain rows (CSV, .xlsx), shaped like an xlrd sheet."""
 
-    Raises :class:`StatementParseError` if the file cannot be opened as an
-    ``.xls`` workbook or does not contain a recognisable statement layout.
-    """
+    def __init__(self, rows: list[list[object]], name: str = ""):
+        self.name = name
+        self._rows = [["" if value is None else value for value in row] for row in rows]
+        self.nrows = len(self._rows)
+        self.ncols = max((len(row) for row in self._rows), default=0)
 
+    def cell_value(self, row: int, col: int) -> object:
+        values = self._rows[row]
+        if col >= len(values):
+            return ""
+        return values[col]
+
+
+class _GridBook:
+    def __init__(self, sheets: list[_GridSheet]):
+        self._sheets = sheets
+
+    def sheets(self) -> list[_GridSheet]:
+        return self._sheets
+
+
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0"
+_ZIP_MAGIC = b"PK\x03\x04"
+
+
+def _open_xls(file_path: str):
     try:
         import xlrd
     except ImportError as exc:  # pragma: no cover - environment issue
@@ -590,14 +746,106 @@ def parse_statement(file_path: str) -> ParsedStatement:
         ) from exc
 
     try:
-        book = xlrd.open_workbook(file_path)
-    except FileNotFoundError as exc:
-        raise StatementParseError(f"Statement file not found: {file_path}") from exc
+        return xlrd.open_workbook(file_path)
     except Exception as exc:
         raise StatementParseError(
-            f"Could not open {file_path} as a legacy .xls workbook: {exc}. "
-            "M-Pesa statements must be downloaded in the original .xls format "
-            "(not .xlsx or .csv)."
+            f"Could not open {file_path} as an .xls workbook: {exc}"
         ) from exc
 
-    return _parse_sheet(_select_sheet(book))
+
+def _open_xlsx(file_path: str) -> _GridBook:
+    try:
+        import openpyxl
+    except ImportError as exc:  # pragma: no cover - environment issue
+        raise StatementParseError(
+            "The 'openpyxl' package is required to read .xlsx statements."
+        ) from exc
+
+    try:
+        book = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    except Exception as exc:
+        raise StatementParseError(
+            f"Could not open {file_path} as an .xlsx workbook: {exc}"
+        ) from exc
+
+    try:
+        return _GridBook(
+            [
+                _GridSheet(
+                    [list(row) for row in sheet.iter_rows(values_only=True)],
+                    sheet.title,
+                )
+                for sheet in book.worksheets
+            ]
+        )
+    finally:
+        book.close()
+
+
+def _open_csv(file_path: str, head: bytes) -> _GridBook:
+    import csv
+
+    if b"\x00" in head:
+        raise StatementParseError(
+            f"{file_path} is not an .xls, .xlsx or .csv M-Pesa statement."
+        )
+
+    with open(file_path, "rb") as f:
+        raw = f.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")
+
+    return _GridBook([_GridSheet(list(csv.reader(text.splitlines())), "csv")])
+
+
+def _open_book(file_path: str):
+    """Open the statement by what the file *is*, not by its extension."""
+
+    try:
+        with open(file_path, "rb") as f:
+            head = f.read(1024)
+    except FileNotFoundError as exc:
+        raise StatementParseError(f"Statement file not found: {file_path}") from exc
+
+    if head.startswith(_OLE2_MAGIC):
+        return _open_xls(file_path)
+    if head.startswith(_ZIP_MAGIC):
+        return _open_xlsx(file_path)
+    return _open_csv(file_path, head)
+
+
+def _apply_file_name(parsed: ParsedStatement, file_name: str) -> None:
+    """Fill shortcode and period from ``Statements for <code> from <d> to <d>``.
+
+    Only fills what the file itself did not supply, so the legacy preamble
+    always wins.
+    """
+
+    match = _FILE_NAME_METADATA.search(os.path.basename(file_name or ""))
+    if not match:
+        return
+    if not parsed.business_shortcode:
+        parsed.business_shortcode = match["shortcode"]
+    if not parsed.statement_period:
+        parsed.statement_period = f"{match['start']} to {match['end']}"
+
+
+def parse_statement(
+    file_path: str, original_name: str | None = None
+) -> ParsedStatement:
+    """Parse an M-Pesa Utility Account statement export (.xls, .xlsx or .csv).
+
+    ``original_name`` is the name the file was uploaded under; it is used to
+    read the shortcode and period from the newer template's file name when the
+    file on disk has been renamed.
+
+    Raises :class:`StatementParseError` if the file cannot be opened or does
+    not contain a recognisable statement layout.
+    """
+
+    book = _open_book(file_path)
+    parsed = _parse_sheet(_select_sheet(book))
+    _apply_file_name(parsed, original_name or file_path)
+    return parsed

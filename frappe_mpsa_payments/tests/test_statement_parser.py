@@ -393,13 +393,23 @@ def test_missing_header_row_raises_on_a_bare_sheet():
         parse_rows([["Account Holder:", "Nobody"], ["a", "b", "c"]])
 
 
-def test_non_xls_file_raises(tmp_path):
+def test_text_file_that_is_not_a_statement_raises(tmp_path):
+    # Text is now read as CSV, so a non-statement text file fails on the
+    # missing header rather than on the workbook format.
     path = tmp_path / "not_a_workbook.xls"
     path.write_text("receipt,amount\nABC,100\n")
 
     with pytest.raises(StatementParseError) as excinfo:
         parse_statement(str(path))
-    assert ".xls" in str(excinfo.value)
+    assert "Receipt No." in str(excinfo.value)
+
+
+def test_binary_file_that_is_not_a_statement_raises(tmp_path):
+    path = tmp_path / "statement.pdf"
+    path.write_bytes(b"%PDF-1.4\n\x00\xff\xfe\x00binary junk\x00")
+
+    with pytest.raises(StatementParseError):
+        parse_statement(str(path))
 
 
 def test_missing_file_raises():
@@ -536,3 +546,171 @@ def test_paid_in_given_as_text_is_still_parsed():
     rows[8][5] = "7,800.00"
     row = parse_rows(rows).payment_rows[0]
     assert row.amount == 7800.0
+
+
+# ---------------------------------------------------------------------------
+# 8. The newer "Statements for <shortcode>" template (.csv / .xlsx)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def new_csv_path(tmp_path_factory) -> str:
+    path = tmp_path_factory.mktemp("new") / f"{make_fixture.NEW_FILE_NAME}.csv"
+    return make_fixture.write_new_template_csv(str(path))
+
+
+@pytest.fixture(scope="module")
+def new_xlsx_path(tmp_path_factory) -> str:
+    path = tmp_path_factory.mktemp("new") / f"{make_fixture.NEW_FILE_NAME}.xlsx"
+    return make_fixture.write_new_template_xlsx(str(path))
+
+
+@pytest.fixture(scope="module")
+def new_parsed(new_csv_path) -> ParsedStatement:
+    return parse_statement(new_csv_path)
+
+
+def test_new_template_csv_and_xlsx_parse_identically(new_csv_path, new_xlsx_path):
+    from_csv = parse_statement(new_csv_path)
+    from_xlsx = parse_statement(new_xlsx_path)
+    assert from_csv == from_xlsx
+
+
+def test_new_template_payment_rows_are_the_customer_payments_only(new_parsed):
+    receipts = [row.receipt_no for row in new_parsed.payment_rows]
+    assert receipts == [payment[0] for payment in make_fixture.NEW_PAYMENTS]
+    assert round(sum(row.amount for row in new_parsed.payment_rows), 2) == (
+        make_fixture.NEW_TOTAL_PAID_IN
+    )
+
+
+def test_new_template_counts_every_data_row(new_parsed):
+    # 1 bank withdrawal + 2 internal pairs + the payments
+    expected = (
+        1
+        + 2 * len(make_fixture.NEW_INTERNAL_TRANSFERS)
+        + len(make_fixture.NEW_PAYMENTS)
+    )
+    assert new_parsed.total_rows == expected
+
+
+@pytest.mark.parametrize(
+    "receipt, completion, details, amount, expected",
+    make_fixture.NEW_PAYMENTS,
+    ids=[payment[0] for payment in make_fixture.NEW_PAYMENTS],
+)
+def test_new_template_fields_come_from_details(
+    new_parsed, receipt, completion, details, amount, expected
+):
+    row = next(row for row in new_parsed.payment_rows if row.receipt_no == receipt)
+    assert row.amount == amount
+    for field_name, value in expected.items():
+        assert getattr(row, field_name) == value, field_name
+
+
+def test_new_template_completion_time(new_parsed):
+    row = new_parsed.payment_rows[0]
+    assert row.completion_time == "2020-01-04 16:15:18"
+    assert row.transtime == "20200104161518"
+
+
+def test_new_template_currency_comes_from_the_amount_header(new_parsed):
+    assert {row.currency for row in new_parsed.payment_rows} == {"KES"}
+
+
+def test_new_template_shortcode_and_period_come_from_the_file_name(new_parsed):
+    assert new_parsed.business_shortcode == make_fixture.NEW_SHORT_CODE
+    assert new_parsed.statement_period == make_fixture.NEW_PERIOD
+    assert new_parsed.account_holder == ""
+
+
+def test_original_name_wins_over_the_name_on_disk(tmp_path):
+    # Frappe may store the upload under a different name; the doctype passes
+    # the File's original name.
+    path = make_fixture.write_new_template_csv(str(tmp_path / "abc123.csv"))
+    parsed = parse_statement(
+        path,
+        original_name="Statements for 777888 from 2020-02-01 to 2020-02-03 (1).csv",
+    )
+    assert parsed.business_shortcode == "777888"
+    assert parsed.statement_period == "2020-02-01 to 2020-02-03"
+
+
+def test_unrecognised_file_name_leaves_shortcode_blank(tmp_path):
+    path = make_fixture.write_new_template_csv(str(tmp_path / "renamed.csv"))
+    parsed = parse_statement(path)
+    assert parsed.business_shortcode == ""
+    assert len(parsed.payment_rows) == len(make_fixture.NEW_PAYMENTS)
+
+
+def test_new_template_internal_transfers_are_ignored_not_imported(new_parsed):
+    ignored = [(row.receipt_no, row.details) for row in new_parsed.ignored_rows]
+    expected = []
+    for receipt, _completion, details in make_fixture.NEW_INTERNAL_TRANSFERS:
+        expected += [(receipt, details), (receipt, details)]
+    assert sorted(ignored) == sorted(expected)
+
+    paid_in = sorted(row.paid_in for row in new_parsed.ignored_rows)
+    assert paid_in == [0.0, 0.0] + [make_fixture.NEW_TOTAL_PAID_IN] * 2
+
+
+def test_new_template_bank_withdrawal(new_parsed):
+    receipt, _completion, details = make_fixture.NEW_BANK_WITHDRAWAL
+    assert len(new_parsed.bank_withdrawals) == 1
+    withdrawal = new_parsed.bank_withdrawals[0]
+    assert withdrawal.receipt_no == receipt
+    assert withdrawal.details == details
+    assert withdrawal.amount == make_fixture.NEW_TOTAL_PAID_IN
+    assert withdrawal.completion_time == "2020-01-04 23:09:30"
+
+
+def test_old_template_has_no_bank_withdrawals_or_ignored_rows(parsed):
+    # The legacy layout is untouched: settlements and charge twins stay silent.
+    assert parsed.bank_withdrawals == []
+    assert parsed.ignored_rows == []
+
+
+def test_currency_suffixed_headers_map_on_any_layout():
+    result = parse_rows(
+        [
+            [
+                "Receipt No",
+                "Completion Time",
+                "Details",
+                "Paid In (KES)",
+                "Withdrawn (KES)",
+            ],
+            [
+                "ABC",
+                "01/01/2020 10:00:00",
+                "Pay Bill from 2547****1 - A B Acc. x",
+                "10.00",
+                "0.00",
+            ],
+        ]
+    )
+    assert [row.receipt_no for row in result.payment_rows] == ["ABC"]
+    assert result.payment_rows[0].currency == "KES"
+
+
+def test_details_layout_inflow_without_payment_shape_is_not_imported():
+    result = parse_rows(
+        [
+            [
+                "Receipt No",
+                "Completion Time",
+                "Details",
+                "Paid In (KSHs)",
+                "Withdrawn (KSHs)",
+            ],
+            [
+                "XYZ",
+                "01/01/2020 10:00:00",
+                "Some New Internal Sweep",
+                "500,000.00",
+                "0.00",
+            ],
+        ]
+    )
+    assert result.payment_rows == []
+    assert [row.receipt_no for row in result.ignored_rows] == ["XYZ"]

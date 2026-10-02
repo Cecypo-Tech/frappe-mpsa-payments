@@ -36,7 +36,7 @@
   },
   {
    "allow_on_submit": 0,
-   "description": "The M-Pesa Utility Account statement to import.",
+   "description": "The M-Pesa statement to import: the .xls export, or the newer 'Statements for ...' .csv / .xlsx.",
    "fieldname": "statement_file",
    "fieldtype": "Attach",
    "in_standard_filter": 0,
@@ -64,12 +64,12 @@
    "label": "Parsed Statement"
   },
   {
+   "description": "Read from the statement. Enter it only when the statement file was renamed and no longer says which shortcode it is for.",
    "fieldname": "business_shortcode",
    "fieldtype": "Data",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "label": "Business Shortcode",
-   "read_only": 1
+   "label": "Business Shortcode"
   },
   {
    "fieldname": "account_holder",
@@ -175,7 +175,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-07-28 00:00:00.000000",
+ "modified": "2026-10-02 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Frappe Mpsa Payments",
  "name": "Mpesa Statement Import",
