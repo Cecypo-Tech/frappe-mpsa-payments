@@ -38,7 +38,7 @@ class TestStkPushReuse(FrappeTestCase):
             }
         ).db_insert()
 
-    def _push(self, amount):
+    def _push(self, amount, phone=PHONE, currency="KES"):
         # No Safaricom call: a new request is built but never sent.
         with (
             patch(f"{MODULE}.get_payment_gateway_from_mop", return_value=GATEWAY),
@@ -46,10 +46,11 @@ class TestStkPushReuse(FrappeTestCase):
             patch(f"{REQUEST_CLASS}.submit"),
         ):
             return create_stk_push_request(
-                phone_number=PHONE,
+                phone_number=phone,
                 amount=amount,
                 mode_of_payment="_Test",
                 company="_Test",
+                currency=currency,
                 account_reference=REFERENCE,
                 prevent_duplicates=1,
             )
@@ -60,8 +61,31 @@ class TestStkPushReuse(FrappeTestCase):
         self.assertTrue(result["duplicate_prevented"])
         self.assertEqual(result["request_name"], "_Test STK Pending")
 
-    def test_a_changed_amount_sends_a_new_push(self):
-        """A discount after the first push must not leave the customer asked for the old amount."""
+    def test_a_changed_amount_waits_for_the_pending_push(self):
+        """A discount after the first push must not leave the customer with two live prompts
+        for one sale, nor reuse the old amount: it is refused until the first one ends."""
+        with self.assertRaisesRegex(
+            frappe.ValidationError, "still waiting on the customer"
+        ):
+            self._push(4)
+
+    def test_another_phone_waits_for_the_pending_push(self):
+        with self.assertRaisesRegex(
+            frappe.ValidationError, "still waiting on the customer"
+        ):
+            self._push(560, phone="254700000999")
+
+    def test_another_currency_is_not_the_same_ask(self):
+        with self.assertRaisesRegex(
+            frappe.ValidationError, "still waiting on the customer"
+        ):
+            self._push(560, currency="USD")
+
+    def test_a_new_push_goes_out_once_the_pending_one_ended(self):
+        frappe.db.set_value(
+            "Mpesa Express Request", "_Test STK Pending", "status", "Failed"
+        )
+
         result = self._push(4)
 
         self.assertFalse(result["duplicate_prevented"])

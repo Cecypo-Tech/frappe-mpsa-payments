@@ -84,12 +84,7 @@ def create_stk_push_request(
     if prevent_dup and account_reference:
         pending = frappe.get_all(
             "Mpesa Express Request",
-            filters={
-                "status": "In Progress",
-                "account_reference": account_reference,
-                "phone_number": normalized_phone,
-                "payment_gateway": payment_gateway,
-            },
+            filters={"status": "In Progress", "account_reference": account_reference},
             fields=[
                 "name",
                 "status",
@@ -97,20 +92,22 @@ def create_stk_push_request(
                 "amount",
                 "base_amount",
                 "currency",
+                "phone_number",
+                "payment_gateway",
                 "transaction_id",
             ],
             order_by="creation desc",
         )
-        # Only the same ask is a duplicate: when the amount changed (a discount
-        # after the first push), the customer must be asked for the new one.
-        existing = [
+        same_ask = [
             r
             for r in pending
-            if flt(r.base_amount, 2) == flt(amount, 2)
+            if r.phone_number == normalized_phone
+            and r.payment_gateway == payment_gateway
+            and flt(r.base_amount, 2) == flt(amount, 2)
             and (r.currency or "KES") == (currency or "KES")
         ]
-        if existing:
-            doc = existing[0]
+        if same_ask:
+            doc = same_ask[0]
             return {
                 "status": "success",
                 "duplicate_prevented": True,
@@ -120,6 +117,21 @@ def create_stk_push_request(
                 "transaction_id": doc.get("transaction_id"),
                 "amount": flt(doc.get("amount") or amount),
             }
+        if pending:
+            # Asking again for a different amount (a discount since), or on another phone,
+            # would leave the customer with two live prompts for one sale - and both could be
+            # paid. The first one ends within a couple of minutes, paid or not.
+            frappe.throw(
+                _(
+                    "M-Pesa request {0} for {1} is still waiting on the customer ({2} {3}). "
+                    "Wait for it to finish before asking again."
+                ).format(
+                    pending[0].name,
+                    account_reference,
+                    pending[0].currency or "KES",
+                    flt(pending[0].base_amount, 2),
+                )
+            )
 
     express_request = frappe.get_doc(
         {
