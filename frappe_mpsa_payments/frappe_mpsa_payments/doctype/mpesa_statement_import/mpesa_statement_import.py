@@ -28,6 +28,9 @@ class MpesaStatementImport(Document):
         # The importer writes every register from the parsed statement, so a
         # typed shortcode has to land there too.
         parsed.business_shortcode = self.business_shortcode
+        # Refuse before anything is written: registers for an unregistered
+        # shortcode get no mode of payment and can never be posted.
+        _registered_url(self.business_shortcode)
         self.account_holder = parsed.account_holder
         self.statement_period = parsed.statement_period
         self.total_rows = cint(parsed.total_rows)
@@ -93,6 +96,10 @@ class MpesaStatementImport(Document):
         except frappe.exceptions.DuplicateEntryError:
             self._throw_already_imported()
 
+    def before_submit(self):
+        # The registration can change between saving the draft and importing.
+        _registered_url(self.business_shortcode)
+
     def on_submit(self):
         parsed = self._get_parsed()
         parsed.business_shortcode = self.business_shortcode
@@ -110,6 +117,36 @@ class MpesaStatementImport(Document):
         )
 
         _log_run(self, parsed, result)
+
+    @frappe.whitelist(methods=["POST"])
+    def get_import_preview(self) -> dict:
+        """What submitting will create, for the form to confirm before it does."""
+        self.reload()
+        if self.docstatus != 0:
+            frappe.throw(_("This statement has already been imported."))
+
+        company, mode_of_payment = _registered_url(self.business_shortcode)
+        parsed = self._get_parsed()
+        payments = parsed.payment_rows or []
+        return {
+            "business_shortcode": self.business_shortcode,
+            "company": company,
+            "mode_of_payment": mode_of_payment,
+            # Mpesa C2B Payment Register.after_insert reads the same setting:
+            # when on, every created payment posts a Payment Entry at once.
+            "auto_reconcile": bool(
+                frappe.db.get_value(
+                    "Mpesa Settings",
+                    {"business_shortcode": self.business_shortcode},
+                    "auto_reconcile_c2b",
+                )
+            ),
+            "statement_period": self.statement_period,
+            "payment_count": len(payments),
+            "payment_total": round(sum(row.amount for row in payments), 2),
+            "bank_withdrawal_count": len(parsed.bank_withdrawals or []),
+            "ignored_count": len(parsed.ignored_rows or []),
+        }
 
     # ------------------------------------------------------------------
     # Bank transfer
@@ -332,11 +369,11 @@ class MpesaStatementImport(Document):
 # ----------------------------------------------------------------------
 
 
-def _mpesa_account(shortcode: str) -> tuple[str, str, str]:
-    """(company, mode_of_payment, account) for the shortcode's M-Pesa ledger.
+def _registered_url(shortcode: str) -> tuple[str, str]:
+    """(company, mode_of_payment) of the shortcode's successfully registered URL.
 
-    Resolved the same way Mpesa C2B Payment Register does: through the
-    successfully registered URL for the shortcode.
+    Mpesa C2B Payment Register resolves both the same way; without them its
+    records can never be submitted.
     """
     registered = frappe.get_all(
         "Mpesa C2B Payment Register URL",
@@ -348,13 +385,17 @@ def _mpesa_account(shortcode: str) -> tuple[str, str, str]:
         frappe.throw(
             _(
                 "Shortcode {0} has no successfully registered Mpesa C2B Payment Register URL "
-                "with a company and mode of payment, so the M-Pesa account to transfer "
-                "from is unknown."
+                "with a company and mode of payment, so its payments could not be posted. "
+                "Set up Mpesa Settings for {0} and register its URL first."
             ).format(shortcode),
-            title=_("M-Pesa Account Unknown"),
+            title=_("Shortcode Not Set Up"),
         )
+    return registered[0].company, registered[0].mode_of_payment
 
-    company, mode_of_payment = registered[0].company, registered[0].mode_of_payment
+
+def _mpesa_account(shortcode: str) -> tuple[str, str, str]:
+    """(company, mode_of_payment, account) for the shortcode's M-Pesa ledger."""
+    company, mode_of_payment = _registered_url(shortcode)
     account = frappe.db.get_value(
         "Mode of Payment Account",
         {

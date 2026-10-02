@@ -29,6 +29,7 @@ test_dependencies = ["Company"]
 #: registered shortcode in it, so nothing depends on a particular site's data.
 COMPANY = "Wind Power LLC"
 SHORTCODE = "999654"
+TYPED_SHORTCODE = "777888"
 MODE_OF_PAYMENT = "_Test Statement Mpesa"
 MPESA_ACCOUNT = "_Test Statement Mpesa - WP"
 BANK_ACCOUNT = "_Test Statement Bank - WP"
@@ -68,19 +69,30 @@ def _make_registered_shortcode():
             }
         ).insert(ignore_permissions=True)
 
-    if not frappe.db.exists("Mpesa C2B Payment Register URL", SHORTCODE):
-        # db_insert: the controller's validate registers the URL with Safaricom.
-        frappe.get_doc(
-            {
-                "doctype": "Mpesa C2B Payment Register URL",
-                "name": SHORTCODE,
-                "mpesa_settings": SHORTCODE,
-                "business_shortcode": SHORTCODE,
-                "register_status": "Success",
-                "company": COMPANY,
-                "mode_of_payment": MODE_OF_PAYMENT,
-            }
-        ).db_insert()
+    _register_url(SHORTCODE)
+    # The shortcode a renamed file's tests type in.
+    _register_url(TYPED_SHORTCODE)
+
+
+def _register_url(
+    shortcode: str,
+    status: str = "Success",
+    mode_of_payment: str | None = MODE_OF_PAYMENT,
+):
+    if frappe.db.exists("Mpesa C2B Payment Register URL", shortcode):
+        return
+    # db_insert: the controller's validate registers the URL with Safaricom.
+    frappe.get_doc(
+        {
+            "doctype": "Mpesa C2B Payment Register URL",
+            "name": shortcode,
+            "mpesa_settings": shortcode,
+            "business_shortcode": shortcode,
+            "register_status": status,
+            "company": COMPANY,
+            "mode_of_payment": mode_of_payment,
+        }
+    ).db_insert()
 
 
 class TestMpesaStatementImport(FrappeTestCase):
@@ -151,10 +163,10 @@ class TestMpesaStatementImport(FrappeTestCase):
 
     def test_renamed_file_keeps_the_typed_shortcode(self):
         doc = self._new_import(
-            file_name="renamed.csv", business_shortcode=" 777888 "
+            file_name="renamed.csv", business_shortcode=f" {TYPED_SHORTCODE} "
         ).insert()
 
-        self.assertEqual(doc.business_shortcode, "777888")
+        self.assertEqual(doc.business_shortcode, TYPED_SHORTCODE)
 
     def test_typed_shortcode_that_contradicts_the_file_is_refused(self):
         doc = self._new_import(business_shortcode="111111")
@@ -169,18 +181,18 @@ class TestMpesaStatementImport(FrappeTestCase):
         left blank, no Mpesa Settings, company or mode of payment is found.
         """
         doc = self._new_import(
-            file_name="renamed.csv", business_shortcode="777888"
+            file_name="renamed.csv", business_shortcode=TYPED_SHORTCODE
         ).insert()
 
         with patch(IMPORTER, return_value=NO_ROWS) as importer, patch(LOG_RUN):
             doc.submit()
 
         parsed = importer.call_args.args[0]
-        self.assertEqual(parsed.business_shortcode, "777888")
+        self.assertEqual(parsed.business_shortcode, TYPED_SHORTCODE)
 
     def test_replacing_with_a_renamed_file_keeps_the_typed_shortcode(self):
         doc = self._new_import(
-            file_name="renamed.csv", business_shortcode="777888"
+            file_name="renamed.csv", business_shortcode=TYPED_SHORTCODE
         ).insert()
 
         doc.statement_file = self._attach(
@@ -188,9 +200,10 @@ class TestMpesaStatementImport(FrappeTestCase):
         )
         doc.save()
 
-        self.assertEqual(doc.business_shortcode, "777888")
+        self.assertEqual(doc.business_shortcode, TYPED_SHORTCODE)
 
     def test_replacing_the_file_does_not_read_the_old_shortcode_as_typed(self):
+        _register_url("111111")
         doc = self._new_import(
             file_name="Statements for 111111 from 2020-01-04 to 2020-01-04.csv"
         ).insert()
@@ -204,6 +217,83 @@ class TestMpesaStatementImport(FrappeTestCase):
         doc.save()
 
         self.assertEqual(doc.business_shortcode, SHORTCODE)
+
+    # ------------------------------------------------------------------
+    # Registered shortcode
+    # ------------------------------------------------------------------
+
+    def test_unregistered_shortcode_from_the_file_name_is_refused(self):
+        doc = self._new_import(
+            file_name="Statements for 555111 from 2020-01-04 to 2020-01-04.csv"
+        )
+
+        with self.assertRaisesRegex(
+            frappe.ValidationError, "555111 has no successfully"
+        ):
+            doc.insert()
+
+    def test_unregistered_typed_shortcode_is_refused(self):
+        doc = self._new_import(file_name="renamed.csv", business_shortcode="555111")
+
+        with self.assertRaisesRegex(
+            frappe.ValidationError, "555111 has no successfully"
+        ):
+            doc.insert()
+
+    def test_shortcode_whose_registration_failed_is_refused(self):
+        _register_url("555222", status="Failed")
+        doc = self._new_import(file_name="renamed.csv", business_shortcode="555222")
+
+        with self.assertRaisesRegex(
+            frappe.ValidationError, "555222 has no successfully"
+        ):
+            doc.insert()
+
+    def test_shortcode_registered_without_a_mode_of_payment_is_refused(self):
+        _register_url("555333", mode_of_payment=None)
+        doc = self._new_import(file_name="renamed.csv", business_shortcode="555333")
+
+        with self.assertRaisesRegex(
+            frappe.ValidationError, "555333 has no successfully"
+        ):
+            doc.insert()
+
+    def test_submit_checks_the_registration_again(self):
+        doc = self._new_import().insert()
+        frappe.db.set_value(
+            "Mpesa C2B Payment Register URL", SHORTCODE, "register_status", "Failed"
+        )
+
+        with patch(IMPORTER, return_value=NO_ROWS) as importer, patch(LOG_RUN):
+            with self.assertRaisesRegex(frappe.ValidationError, "has no successfully"):
+                doc.submit()
+        importer.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Preview before importing
+    # ------------------------------------------------------------------
+
+    def test_import_preview_says_what_submitting_will_create(self):
+        doc = self._new_import().insert()
+
+        preview = doc.get_import_preview()
+
+        parsed = doc._get_parsed()
+        self.assertEqual(preview["business_shortcode"], SHORTCODE)
+        self.assertEqual(preview["company"], COMPANY)
+        self.assertEqual(preview["mode_of_payment"], MODE_OF_PAYMENT)
+        self.assertFalse(preview["auto_reconcile"])
+        self.assertEqual(preview["statement_period"], "2020-01-04 to 2020-01-04")
+        self.assertEqual(preview["payment_count"], len(make_fixture.NEW_PAYMENTS))
+        self.assertEqual(preview["payment_total"], make_fixture.NEW_TOTAL_PAID_IN)
+        self.assertEqual(preview["bank_withdrawal_count"], 1)
+        self.assertEqual(preview["ignored_count"], len(parsed.ignored_rows))
+
+    def test_import_preview_needs_a_draft(self):
+        doc = self._submitted_import()
+
+        with self.assertRaisesRegex(frappe.ValidationError, "already been imported"):
+            doc.get_import_preview()
 
     # ------------------------------------------------------------------
     # Bank transfer
@@ -263,11 +353,11 @@ class TestMpesaStatementImport(FrappeTestCase):
             doc.create_bank_transfer(MPESA_ACCOUNT)
 
     def test_bank_transfer_without_a_registered_shortcode_explains_why(self):
-        doc = self._new_import(
-            file_name="renamed.csv", business_shortcode="000999"
-        ).insert()
-        with patch(IMPORTER, return_value=NO_ROWS), patch(LOG_RUN):
-            doc.submit()
+        doc = self._submitted_import()
+        # The registration failed or was redone after the import.
+        frappe.db.set_value(
+            "Mpesa C2B Payment Register URL", SHORTCODE, "register_status", "Failed"
+        )
 
         with self.assertRaisesRegex(
             frappe.ValidationError, "no successfully registered"

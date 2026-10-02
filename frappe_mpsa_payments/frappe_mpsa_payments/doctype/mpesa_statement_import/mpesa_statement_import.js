@@ -5,6 +5,15 @@ frappe.ui.form.on("Mpesa Statement Import", {
 	refresh(frm) {
 		show_result_indicator(frm);
 
+		// Submitting creates the payments, so it says so and asks first,
+		// instead of Frappe's generic "Permanently Submit?".
+		if (frm.doc.docstatus === 0 && !frm.is_new() && !frm.is_dirty() && frm.perm[0]?.submit) {
+			frm.page.set_primary_action(
+				__("Import {0} Payments", [frm.doc.payment_rows || 0]),
+				() => confirm_import(frm)
+			);
+		}
+
 		if (frm.doc.docstatus === 1) {
 			frm.add_custom_button(__("Create Bank Transfer"), () => open_bank_transfer_dialog(frm));
 		}
@@ -71,6 +80,61 @@ function show_result_summary(frm) {
 			</p>
 			<p class="text-muted">${__("Full row-by-row detail is in the Import Summary below.")}</p>
 		`,
+	});
+}
+
+function confirm_import(frm) {
+	frm.call("get_import_preview").then(({ message: preview }) => {
+		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const rows = [
+			[__("Shortcode"), esc(preview.business_shortcode)],
+			[__("Company"), esc(preview.company)],
+			[__("Mode of Payment"), esc(preview.mode_of_payment)],
+			[__("Period"), esc(preview.statement_period)],
+			[
+				__("Payments"),
+				`${esc(preview.payment_count)} &middot; ${format_currency(preview.payment_total, "KES")}`,
+			],
+			[__("Withdrawals to bank"), esc(preview.bank_withdrawal_count)],
+			[__("Not imported"), esc(preview.ignored_count)],
+		]
+			.map(([label, value]) => `<tr><th>${label}</th><td>${value}</td></tr>`)
+			.join("");
+
+		const posting = preview.auto_reconcile
+			? `<p class="text-warning">${__(
+					"Auto-reconcile is on for {0}: each payment posts a Payment Entry as soon as it is created.",
+					[esc(preview.business_shortcode)]
+			  )}</p>`
+			: `<p class="text-muted">${__(
+					"Auto-reconcile is off for {0}: the payments are created as drafts in the Mpesa C2B Payment Register.",
+					[esc(preview.business_shortcode)]
+			  )}</p>`;
+
+		const dialog = new frappe.ui.Dialog({
+			title: __("Import Payments?"),
+			fields: [
+				{
+					fieldtype: "HTML",
+					options: `<table class="table table-bordered table-sm">${rows}</table>${posting}`,
+				},
+			],
+			primary_action_label: __("Create Payments"),
+			primary_action() {
+				dialog.hide();
+				// frm.save runs the submit; savesubmit would ask a second time.
+				frm.save("Submit", (r) => {
+					if (!r.exc) {
+						frm.script_manager.trigger("on_submit");
+					}
+				});
+			},
+			secondary_action_label: __("Cancel"),
+			secondary_action() {
+				dialog.hide();
+			},
+		});
+		dialog.show();
 	});
 }
 
