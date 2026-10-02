@@ -82,7 +82,7 @@ def create_stk_push_request(
     prevent_dup = _to_bool(prevent_duplicates)
 
     if prevent_dup and account_reference:
-        existing = frappe.get_all(
+        pending = frappe.get_all(
             "Mpesa Express Request",
             filters={
                 "status": "In Progress",
@@ -95,11 +95,20 @@ def create_stk_push_request(
                 "status",
                 "checkout_request_id",
                 "amount",
+                "base_amount",
+                "currency",
                 "transaction_id",
             ],
             order_by="creation desc",
-            limit=1,
         )
+        # Only the same ask is a duplicate: when the amount changed (a discount
+        # after the first push), the customer must be asked for the new one.
+        existing = [
+            r
+            for r in pending
+            if flt(r.base_amount, 2) == flt(amount, 2)
+            and (r.currency or "KES") == (currency or "KES")
+        ]
         if existing:
             doc = existing[0]
             return {
