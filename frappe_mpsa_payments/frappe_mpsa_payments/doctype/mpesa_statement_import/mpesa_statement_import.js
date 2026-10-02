@@ -10,6 +10,12 @@ frappe.ui.form.on("Mpesa Statement Import", {
 		}
 	},
 
+	statement_file(frm) {
+		// A shortcode read from the previous file is not one the user typed;
+		// the new file supplies its own, or the user types it in.
+		frm.set_value("business_shortcode", "");
+	},
+
 	on_submit(frm) {
 		// The counts are written server-side with db_set during on_submit,
 		// so pull the saved values back before showing them.
@@ -124,7 +130,10 @@ function open_bank_transfer_dialog(frm) {
 			],
 			primary_action_label: __("Create Draft"),
 			primary_action({ bank_account }) {
-				frm.call("create_bank_transfer", { bank_account }).then(({ message }) => {
+				dialog.get_primary_btn().prop("disabled", true);
+				frm.call("create_bank_transfer", { bank_account })
+					.always(() => dialog.get_primary_btn().prop("disabled", false))
+					.then(({ message }) => {
 					dialog.hide();
 					const entries = message || [];
 					if (entries.length === 1) {

@@ -714,3 +714,94 @@ def test_details_layout_inflow_without_payment_shape_is_not_imported():
     )
     assert result.payment_rows == []
     assert [row.receipt_no for row in result.ignored_rows] == ["XYZ"]
+
+
+def test_details_layout_payment_shape_with_an_unknown_type_is_not_imported():
+    # The new template also covers the Settlement/MMF accounts; an inflow of a
+    # type we have not seen must not become a customer payment just because it
+    # happens to read "<x> from <y> - <z> Acc. <w>".
+    result = parse_rows(
+        [
+            [
+                "Receipt No",
+                "Completion Time",
+                "Details",
+                "Paid In (KSHs)",
+                "Withdrawn (KSHs)",
+            ],
+            [
+                "XYZ",
+                "01/01/2020 10:00:00",
+                "Organization Funds Transfer from 600000 - OWN SHORTCODE Acc. x",
+                "500,000.00",
+                "0.00",
+            ],
+        ]
+    )
+    assert result.payment_rows == []
+    assert [row.receipt_no for row in result.ignored_rows] == ["XYZ"]
+
+
+def test_details_layout_payment_that_also_withdraws_is_not_imported():
+    result = parse_rows(
+        [
+            [
+                "Receipt No",
+                "Completion Time",
+                "Details",
+                "Paid In (KSHs)",
+                "Withdrawn (KSHs)",
+            ],
+            [
+                "XYZ",
+                "01/01/2020 10:00:00",
+                "Pay Bill from 2547****1 - A B Acc. x",
+                "100.00",
+                "-100.00",
+            ],
+        ]
+    )
+    assert result.payment_rows == []
+    assert [row.receipt_no for row in result.ignored_rows] == ["XYZ"]
+
+
+def test_only_a_withdrawal_of_funds_to_bank_is_a_bank_withdrawal():
+    result = parse_rows(
+        [
+            [
+                "Receipt No",
+                "Completion Time",
+                "Details",
+                "Paid In (KSHs)",
+                "Withdrawn (KSHs)",
+            ],
+            [
+                "AAA",
+                "01/01/2020 10:00:00",
+                "Charge for transfer to bank",
+                "0.00",
+                "-50.00",
+            ],
+            [
+                "BBB",
+                "01/01/2020 11:00:00",
+                "Agency Withdrawal of funds to Bank",
+                "0.00",
+                "-900.00",
+            ],
+        ]
+    )
+    assert [w.receipt_no for w in result.bank_withdrawals] == ["BBB"]
+    assert [row.receipt_no for row in result.ignored_rows] == ["AAA"]
+
+
+def test_csv_field_with_a_line_break_inside_quotes_stays_one_row(tmp_path):
+    path = tmp_path / "statement.csv"
+    path.write_text(
+        "Receipt No,Completion Time,Details,Paid In (KSHs),Withdrawn (KSHs)\r\n"
+        'AAA,01/01/2020 10:00:00,"Pay Bill from 2547****1 - A B\nC Acc. x",100.00,0.00\r\n',
+        newline="",
+    )
+    result = parse_statement(str(path))
+    assert result.total_rows == 1
+    assert [row.receipt_no for row in result.payment_rows] == ["AAA"]

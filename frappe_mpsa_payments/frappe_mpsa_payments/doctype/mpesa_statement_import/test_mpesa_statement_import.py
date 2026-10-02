@@ -13,14 +13,74 @@ from frappe_mpsa_payments.tests.fixtures import make_fixture
 from .mpesa_statement_import import _render_summary
 
 IMPORTER = "frappe_mpsa_payments.importer.import_statement"
+#: The run's Error Log entry is written outside the test transaction, so the
+#: rollback would leave one behind per submit.
+LOG_RUN = (
+    "frappe_mpsa_payments.frappe_mpsa_payments.doctype"
+    ".mpesa_statement_import.mpesa_statement_import._log_run"
+)
 NO_ROWS = {"created": 0, "skipped": 0, "blocked": 0, "failed": 0, "details": []}
 
-#: A shortcode with a successful Register URL on this bench (see the C2B
-#: Payment Register tests), so the M-Pesa account can be resolved.
-SHORTCODE = "898102"
-COMPANY = "Dev Co"
-MPESA_ACCOUNT = "Mpesa-898102 - DC"
-BANK_ACCOUNT = "987000111 - DTB Bank - DC"
+# The bank transfer tests lean on ERPNext's own test company, which the runner
+# only creates for doctypes a module declares.
+test_dependencies = ["Company"]
+
+#: ERPNext's test company; this suite builds its own M-Pesa ledger, bank and
+#: registered shortcode in it, so nothing depends on a particular site's data.
+COMPANY = "Wind Power LLC"
+SHORTCODE = "999654"
+MODE_OF_PAYMENT = "_Test Statement Mpesa"
+MPESA_ACCOUNT = "_Test Statement Mpesa - WP"
+BANK_ACCOUNT = "_Test Statement Bank - WP"
+FOREIGN_BANK_ACCOUNT = "_Test Statement Bank EUR - WP"
+
+
+def _make_account(account_name: str, currency: str) -> str:
+    name = f"{account_name} - WP"
+    if not frappe.db.exists("Account", name):
+        frappe.get_doc(
+            {
+                "doctype": "Account",
+                "account_name": account_name,
+                "company": COMPANY,
+                "parent_account": "Bank Accounts - WP",
+                "account_type": "Bank",
+                "account_currency": currency,
+            }
+        ).insert(ignore_permissions=True)
+    return name
+
+
+def _make_registered_shortcode():
+    """An M-Pesa ledger, its mode of payment and a Success register URL."""
+    currency = frappe.db.get_value("Company", COMPANY, "default_currency")
+    _make_account("_Test Statement Mpesa", currency)
+    _make_account("_Test Statement Bank", currency)
+    _make_account("_Test Statement Bank EUR", "EUR" if currency != "EUR" else "USD")
+
+    if not frappe.db.exists("Mode of Payment", MODE_OF_PAYMENT):
+        frappe.get_doc(
+            {
+                "doctype": "Mode of Payment",
+                "mode_of_payment": MODE_OF_PAYMENT,
+                "type": "Bank",
+                "accounts": [{"company": COMPANY, "default_account": MPESA_ACCOUNT}],
+            }
+        ).insert(ignore_permissions=True)
+
+    if not frappe.db.exists("Mpesa C2B Payment Register URL", SHORTCODE):
+        # db_insert: the controller's validate registers the URL with Safaricom.
+        frappe.get_doc(
+            {
+                "doctype": "Mpesa C2B Payment Register URL",
+                "name": SHORTCODE,
+                "mpesa_settings": SHORTCODE,
+                "business_shortcode": SHORTCODE,
+                "register_status": "Success",
+                "company": COMPANY,
+                "mode_of_payment": MODE_OF_PAYMENT,
+            }
+        ).db_insert()
 
 
 class TestMpesaStatementImport(FrappeTestCase):
@@ -28,6 +88,7 @@ class TestMpesaStatementImport(FrappeTestCase):
         self.addCleanup(frappe.db.rollback)
         self._paths = []
         self.addCleanup(self._remove_files)
+        _make_registered_shortcode()
 
     def _remove_files(self):
         for path in self._paths:
@@ -65,7 +126,7 @@ class TestMpesaStatementImport(FrappeTestCase):
 
     def _submitted_import(self):
         doc = self._new_import().insert()
-        with patch(IMPORTER, return_value=NO_ROWS):
+        with patch(IMPORTER, return_value=NO_ROWS), patch(LOG_RUN):
             doc.submit()
         return doc
 
@@ -100,6 +161,34 @@ class TestMpesaStatementImport(FrappeTestCase):
 
         with self.assertRaisesRegex(frappe.ValidationError, "is for shortcode"):
             doc.insert()
+
+    def test_typed_shortcode_reaches_the_imported_payments(self):
+        """A renamed file's typed shortcode must be what the rows are written with.
+
+        The importer builds every register from ``parsed.business_shortcode``;
+        left blank, no Mpesa Settings, company or mode of payment is found.
+        """
+        doc = self._new_import(
+            file_name="renamed.csv", business_shortcode="777888"
+        ).insert()
+
+        with patch(IMPORTER, return_value=NO_ROWS) as importer, patch(LOG_RUN):
+            doc.submit()
+
+        parsed = importer.call_args.args[0]
+        self.assertEqual(parsed.business_shortcode, "777888")
+
+    def test_replacing_with_a_renamed_file_keeps_the_typed_shortcode(self):
+        doc = self._new_import(
+            file_name="renamed.csv", business_shortcode="777888"
+        ).insert()
+
+        doc.statement_file = self._attach(
+            "renamed-again.xlsx", writer=make_fixture.write_new_template_xlsx
+        )
+        doc.save()
+
+        self.assertEqual(doc.business_shortcode, "777888")
 
     def test_replacing_the_file_does_not_read_the_old_shortcode_as_typed(self):
         doc = self._new_import(
@@ -159,6 +248,14 @@ class TestMpesaStatementImport(FrappeTestCase):
             1,
         )
 
+    def test_bank_transfer_refuses_a_bank_in_another_currency(self):
+        doc = self._submitted_import()
+
+        with self.assertRaisesRegex(
+            frappe.ValidationError, r"is in \w+, but the M-Pesa account"
+        ):
+            doc.create_bank_transfer(FOREIGN_BANK_ACCOUNT)
+
     def test_bank_transfer_refuses_the_mpesa_account_as_the_bank(self):
         doc = self._submitted_import()
 
@@ -169,7 +266,7 @@ class TestMpesaStatementImport(FrappeTestCase):
         doc = self._new_import(
             file_name="renamed.csv", business_shortcode="000999"
         ).insert()
-        with patch(IMPORTER, return_value=NO_ROWS):
+        with patch(IMPORTER, return_value=NO_ROWS), patch(LOG_RUN):
             doc.submit()
 
         with self.assertRaisesRegex(

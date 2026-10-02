@@ -25,6 +25,9 @@ class MpesaStatementImport(Document):
         parsed = self._parse(file_path)
 
         self.business_shortcode = self._resolve_shortcode(parsed.business_shortcode)
+        # The importer writes every register from the parsed statement, so a
+        # typed shortcode has to land there too.
+        parsed.business_shortcode = self.business_shortcode
         self.account_holder = parsed.account_holder
         self.statement_period = parsed.statement_period
         self.total_rows = cint(parsed.total_rows)
@@ -47,17 +50,20 @@ class MpesaStatementImport(Document):
         name, so a renamed file has none and the user types it in.
         """
         typed = (self.business_shortcode or "").strip()
+        from_file = (from_file or "").strip()
 
-        # A value left over from the previously attached file was not typed.
+        # When a new file brings its own shortcode, a value left over from the
+        # previously attached file was not typed and must not contradict it.
+        # A renamed file brings none, so the stored value is all there is.
         before = self.get_doc_before_save()
         if (
-            before
+            from_file
+            and before
             and before.statement_file != self.statement_file
             and typed == (before.business_shortcode or "").strip()
         ):
             typed = ""
 
-        from_file = (from_file or "").strip()
         if from_file and typed and typed != from_file:
             frappe.throw(
                 _(
@@ -89,6 +95,7 @@ class MpesaStatementImport(Document):
 
     def on_submit(self):
         parsed = self._get_parsed()
+        parsed.business_shortcode = self.business_shortcode
         result = importer.import_statement(parsed, self.name)
 
         self.db_set(
@@ -108,7 +115,7 @@ class MpesaStatementImport(Document):
     # Bank transfer
     # ------------------------------------------------------------------
 
-    @frappe.whitelist()
+    @frappe.whitelist(methods=["POST"])
     def get_bank_transfer_context(self) -> dict:
         """What the Create Bank Transfer dialog needs to show and filter on."""
         self._check_can_transfer()
@@ -133,7 +140,7 @@ class MpesaStatementImport(Document):
             ],
         }
 
-    @frappe.whitelist()
+    @frappe.whitelist(methods=["POST"])
     def create_bank_transfer(self, bank_account: str) -> list[dict]:
         """Draft one Internal Transfer per withdrawal-to-bank row.
 
@@ -190,6 +197,10 @@ class MpesaStatementImport(Document):
         return results
 
     def _check_can_transfer(self):
+        # Act on the saved import, not the copy the form sent along, and hold
+        # its row so a double click cannot draft the same transfer twice.
+        frappe.db.get_value(self.doctype, self.name, "name", for_update=True)
+        self.reload()
         if self.docstatus != 1:
             frappe.throw(
                 _(
@@ -206,10 +217,16 @@ class MpesaStatementImport(Document):
         if not self.statement_file:
             frappe.throw(_("Please attach a statement file."))
 
-        try:
-            file_doc = frappe.get_doc("File", {"file_url": self.statement_file})
-        except frappe.DoesNotExistError:
-            file_doc = None
+        # Identical uploads share a file_url; the newest File record carries
+        # the name this one was uploaded under.
+        file_name = frappe.get_all(
+            "File",
+            filters={"file_url": self.statement_file},
+            pluck="name",
+            order_by="creation desc",
+            limit=1,
+        )
+        file_doc = frappe.get_doc("File", file_name[0]) if file_name else None
 
         if not file_doc:
             frappe.throw(
@@ -362,7 +379,10 @@ def _check_bank_account(bank_account: str, company: str, paid_from: str):
         frappe.throw(_("Select the bank account the money went to."))
 
     account = frappe.db.get_value(
-        "Account", bank_account, ["company", "is_group", "account_type"], as_dict=True
+        "Account",
+        bank_account,
+        ["company", "is_group", "account_type", "account_currency"],
+        as_dict=True,
     )
     if not account:
         frappe.throw(_("Account {0} does not exist.").format(bank_account))
@@ -377,6 +397,15 @@ def _check_bank_account(bank_account: str, company: str, paid_from: str):
     if bank_account == paid_from:
         frappe.throw(
             _("{0} is the M-Pesa account itself; pick the bank.").format(bank_account)
+        )
+
+    # The draft moves the same amount out and in.
+    mpesa_currency = frappe.db.get_value("Account", paid_from, "account_currency")
+    if account.account_currency != mpesa_currency:
+        frappe.throw(
+            _(
+                "{0} is in {1}, but the M-Pesa account {2} is in {3}. Pick a {3} bank account."
+            ).format(bank_account, account.account_currency, paid_from, mpesa_currency)
         )
 
 

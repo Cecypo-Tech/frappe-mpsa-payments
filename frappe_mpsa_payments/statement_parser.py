@@ -47,6 +47,7 @@ extension.
 from __future__ import annotations
 
 import datetime
+import io
 import os
 import re
 from dataclasses import dataclass, field
@@ -176,7 +177,19 @@ _DETAILS_PAYMENT = re.compile(
     r"\bAcc\.\s*(?P<account>.*?)(?:\s+via\s+\S+\s+by\s+.*)?\s*$"
 )
 
-_BANK_WITHDRAWAL = re.compile(r"\bto\s+bank\b", re.IGNORECASE)
+#: The customer-payment types seen in the newer template.  A row of any other
+#: type is reported, not imported: these statements also cover the Settlement
+#: and MMF accounts, whose inflows are not customer payments.
+_PAYMENT_TYPES = {
+    "pay bill",
+    "pay bill online",
+    "small business pay bill",
+    "merchant pay utility received",
+    "business pay bill via api",
+    "fsi to pay bill",
+}
+
+_BANK_WITHDRAWAL = re.compile(r"\bwithdrawal\s+of\s+funds\s+to\s+bank\b", re.IGNORECASE)
 
 #: ``Statements for 160745 from 2026-10-01 to 2026-10-01 (1).csv``
 _FILE_NAME_METADATA = re.compile(
@@ -602,6 +615,11 @@ def _parse_sheet(sheet: object) -> ParsedStatement:
             continue
 
         details_match = _DETAILS_PAYMENT.match(details) if details_layout else None
+        if details_match and (
+            details_match["type"].strip().casefold() not in _PAYMENT_TYPES
+            or withdrawn != 0
+        ):
+            details_match = None
         if details_layout and (amount <= 0 or not details_match):
             # An internal sweep, its outbound twin, or an inflow whose shape we
             # do not recognise.  Reported, never imported.
@@ -797,7 +815,10 @@ def _open_csv(file_path: str, head: bytes) -> _GridBook:
     except UnicodeDecodeError:
         text = raw.decode("cp1252", errors="replace")
 
-    return _GridBook([_GridSheet(list(csv.reader(text.splitlines())), "csv")])
+    # newline="" keeps a line break inside a quoted field part of that field.
+    return _GridBook(
+        [_GridSheet(list(csv.reader(io.StringIO(text, newline=""))), "csv")]
+    )
 
 
 def _open_book(file_path: str):
