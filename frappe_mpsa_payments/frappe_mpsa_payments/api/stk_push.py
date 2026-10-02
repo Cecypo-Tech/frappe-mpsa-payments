@@ -17,7 +17,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import add_to_date, flt
 
 from .sales_invoice import get_payment_gateway_from_mop
 
@@ -32,6 +32,22 @@ def _normalize_kenyan_phone(phone_number: str) -> str:
     if len(digits) >= 9:
         return "254" + digits[-9:]
     return digits
+
+
+#: Safaricom drops an unanswered prompt after about a minute and reports it. A request still
+#: In Progress well after that lost its callback; it can no longer be paid from the prompt.
+PROMPT_LIFETIME_MINUTES = 5
+
+
+def _same_sale(account_reference, reference_doctype, reference_name) -> dict:
+    """Requests for the same sale: by the document it is for when the caller names one (an
+    account reference may be shared, like a till code), else by the account reference."""
+    if reference_doctype and reference_name:
+        return {
+            "reference_doctype": reference_doctype,
+            "reference_name": reference_name,
+        }
+    return {"account_reference": account_reference}
 
 
 def _to_bool(value) -> bool:
@@ -81,10 +97,11 @@ def create_stk_push_request(
     normalized_phone = _normalize_kenyan_phone(phone_number)
     prevent_dup = _to_bool(prevent_duplicates)
 
-    if prevent_dup and account_reference:
+    if prevent_dup and (account_reference or (reference_doctype and reference_name)):
+        sale = _same_sale(account_reference, reference_doctype, reference_name)
         paid = frappe.db.get_value(
             "Mpesa Express Request",
-            {"status": "Completed", "account_reference": account_reference},
+            {**sale, "docstatus": 1, "status": "Completed"},
             "name",
         )
         if paid:
@@ -93,12 +110,17 @@ def create_stk_push_request(
                 _(
                     "M-Pesa request {0} for {1} was already paid. Submit the sale instead of "
                     "asking again."
-                ).format(paid, account_reference)
+                ).format(paid, account_reference or reference_name)
             )
 
         pending = frappe.get_all(
             "Mpesa Express Request",
-            filters={"status": "In Progress", "account_reference": account_reference},
+            filters={
+                **sale,
+                "docstatus": 1,
+                "status": "In Progress",
+                "creation": [">", add_to_date(None, minutes=-PROMPT_LIFETIME_MINUTES)],
+            },
             fields=[
                 "name",
                 "status",
@@ -141,7 +163,7 @@ def create_stk_push_request(
                     "Wait for it to finish before asking again."
                 ).format(
                     pending[0].name,
-                    account_reference,
+                    account_reference or reference_name,
                     pending[0].currency or "KES",
                     flt(pending[0].base_amount, 2),
                 )

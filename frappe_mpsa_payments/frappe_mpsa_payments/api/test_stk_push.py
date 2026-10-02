@@ -28,6 +28,7 @@ class TestStkPushReuse(FrappeTestCase):
             {
                 "doctype": "Mpesa Express Request",
                 "name": "_Test STK Pending",
+                "docstatus": 1,
                 "status": "In Progress",
                 "account_reference": REFERENCE,
                 "phone_number": PHONE,
@@ -38,7 +39,7 @@ class TestStkPushReuse(FrappeTestCase):
             }
         ).db_insert()
 
-    def _push(self, amount, phone=PHONE, currency="KES"):
+    def _push(self, amount, phone=PHONE, currency="KES", reference=(None, None)):
         # No Safaricom call: a new request is built but never sent.
         with (
             patch(f"{MODULE}.get_payment_gateway_from_mop", return_value=GATEWAY),
@@ -52,6 +53,8 @@ class TestStkPushReuse(FrappeTestCase):
                 company="_Test",
                 currency=currency,
                 account_reference=REFERENCE,
+                reference_doctype=reference[0],
+                reference_name=reference[1],
                 prevent_duplicates=1,
             )
 
@@ -101,3 +104,39 @@ class TestStkPushReuse(FrappeTestCase):
 
         with self.assertRaisesRegex(frappe.ValidationError, "already paid"):
             self._push(560)
+
+    def test_a_push_pending_for_longer_than_a_prompt_lives_does_not_block(self):
+        """Its callback was lost: the prompt expired at Safaricom long ago."""
+        frappe.db.set_value(
+            "Mpesa Express Request",
+            "_Test STK Pending",
+            "creation",
+            frappe.utils.add_to_date(None, minutes=-10),
+            update_modified=False,
+        )
+
+        result = self._push(4)
+
+        self.assertFalse(result["duplicate_prevented"])
+
+    def test_a_pay_by_link_draft_never_sent_does_not_block(self):
+        frappe.db.set_value(
+            "Mpesa Express Request", "_Test STK Pending", "docstatus", 0
+        )
+
+        result = self._push(4)
+
+        self.assertFalse(result["duplicate_prevented"])
+
+    def test_the_document_a_push_is_for_decides_when_given(self):
+        """A caller reusing one account reference (a till code) for many sales is not
+        blocked by another sale's push."""
+        frappe.db.set_value(
+            "Mpesa Express Request",
+            "_Test STK Pending",
+            {"reference_doctype": "Sales Order", "reference_name": "_TEST-OTHER-SALE"},
+        )
+
+        result = self._push(4, reference=("Sales Order", "_TEST-THIS-SALE"))
+
+        self.assertFalse(result["duplicate_prevented"])
