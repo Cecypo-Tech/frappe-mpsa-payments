@@ -246,23 +246,16 @@ def generate_request_password(settings: Document, timestamp: str) -> str:
 def transaction_status_error_callback(
     response: dict, payload: dict, document_name: str, **kwargs
 ) -> None:
-    """Mark transaction as failed immediately if query fails."""
+    """Log a status query Safaricom answered with an error; leave the request alone.
+
+    An error is no answer about the payment: "The transaction is being processed"
+    (HTTP 500, 500.001.1001) means the customer is still on the prompt, and an
+    authentication error means Safaricom was never asked. Marking the request
+    Failed unlocked a second prompt while the first could still be paid.
+    """
     frappe.log_error(
         message=f"Transaction {document_name} query failed.\nResponse: {frappe.as_json(response)}",
         title="Mpesa Transaction Status Query Error",
-    )
-
-    frappe.db.set_value(
-        MPESA_EXPRESS_REQUEST_DOCTYPE,
-        document_name,
-        {
-            "status": "Failed",
-            "result_desc": (
-                response.get("errorMessage")
-                if isinstance(response, dict)
-                else "Unknown error"
-            ),
-        },
     )
 
 

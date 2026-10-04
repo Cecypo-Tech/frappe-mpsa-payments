@@ -12,7 +12,15 @@ from .m_pesa_api import (
     get_token,
     initiate_stk_push,
     submit_mpesa_payment,
+    transaction_status_error_callback,
     validation,
+)
+from .mpesa_response_handler import transaction_status_on_success
+
+EXPRESS = "Mpesa Express Request"
+REQUEST_CLASS = (
+    "frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_express_request"
+    ".mpesa_express_request.MpesaExpressRequest"
 )
 
 
@@ -297,3 +305,95 @@ class TestMPesaAPI(FrappeTestCase):
             "MP001", "Test Customer", submit_payment=True
         )
         mock_get_doc.assert_called_once_with("Payment Entry", "PE001")
+
+
+class TestTransactionStatusAnswers(FrappeTestCase):
+    """Only Safaricom's answer about a push changes it.
+
+    The status query - check_transaction_status, also the desk's Check Transaction
+    Status button - marked the push Failed on any error reply, "The transaction is
+    being processed" included, which unlocked a second prompt while the customer
+    could still pay the first. And it ran the paid handling for every answer.
+    """
+
+    def setUp(self):
+        self.addCleanup(frappe.db.rollback)
+        # transaction_status_on_success raises this for the rest of the request.
+        self.addCleanup(frappe.flags.pop, "ignore_permissions", None)
+        self.name = f"_Test STK Status {frappe.generate_hash(length=6)}"
+        frappe.get_doc(
+            {
+                "doctype": EXPRESS,
+                "name": self.name,
+                "docstatus": 1,
+                "status": "In Progress",
+                "phone_number": "254700000123",
+                "currency": "KES",
+                "base_amount": 450,
+                "amount": 450,
+            }
+        ).db_insert()
+
+    def _push(self):
+        return frappe.db.get_value(EXPRESS, self.name, ["status", "result_desc"])
+
+    def _answer(self, **response):
+        """Safaricom's 200 reply, through the success handler."""
+        with patch(f"{REQUEST_CLASS}.reconcile_payment") as reconcile:
+            transaction_status_on_success(response=response, document_name=self.name)
+        return reconcile
+
+    def _error(self, **response):
+        """Safaricom's error reply (any non-2xx), through the error handler."""
+        transaction_status_error_callback(
+            response=response, payload={}, document_name=self.name
+        )
+
+    def test_paid_completes_the_push_and_reconciles_it(self):
+        reconcile = self._answer(
+            ResultCode="0", ResultDesc="The service request is processed successfully."
+        )
+
+        self.assertEqual(
+            self._push(),
+            ("Completed", "The service request is processed successfully."),
+        )
+        reconcile.assert_called_once()
+
+    def test_a_cancelled_prompt_fails_the_push_and_reconciles_nothing(self):
+        reconcile = self._answer(
+            ResultCode="1032", ResultDesc="Request cancelled by user"
+        )
+
+        self.assertEqual(self._push(), ("Failed", "Request cancelled by user"))
+        reconcile.assert_not_called()
+
+    def test_no_result_yet_leaves_the_push_waiting(self):
+        for response in (
+            {
+                "ResultCode": "4999",
+                "ResultDesc": "The transaction is still under processing",
+            },
+            {"ResponseCode": "0"},
+        ):
+            with self.subTest(response=response):
+                reconcile = self._answer(**response)
+
+                self.assertEqual(self._push(), ("In Progress", None))
+                reconcile.assert_not_called()
+
+    def test_being_processed_leaves_the_push_waiting(self):
+        self._error(
+            requestId="1",
+            errorCode="500.001.1001",
+            errorMessage="The transaction is being processed",
+        )
+
+        self.assertEqual(self._push(), ("In Progress", None))
+
+    def test_an_authentication_error_leaves_the_push_waiting(self):
+        self._error(
+            requestId="2", errorCode="404.001.03", errorMessage="Invalid Access Token"
+        )
+
+        self.assertEqual(self._push(), ("In Progress", None))

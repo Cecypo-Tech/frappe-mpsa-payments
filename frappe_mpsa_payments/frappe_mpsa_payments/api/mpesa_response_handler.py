@@ -16,6 +16,11 @@ def balance_query_on_success(response: dict, document_name: str, **kwargs) -> No
     pass
 
 
+# "The transaction is still under processing": Safaricom has no result for the
+# push yet, which says nothing about whether the customer paid.
+STILL_PROCESSING_CODE = "4999"
+
+
 def transaction_status_on_success(response: dict, document_name: str, **kwargs) -> None:
     try:
         # frappe.set_user("Administrator")
@@ -23,6 +28,9 @@ def transaction_status_on_success(response: dict, document_name: str, **kwargs) 
         frappe.flags.ignore_permissions = True
 
         result_code = response.get("ResultCode")
+        if result_code in (None, "") or str(result_code) == STILL_PROCESSING_CODE:
+            # Only a result changes the request; with none yet it stays as it is.
+            return
         status = "Completed" if result_code == "0" else "Failed"
 
         request_doc = frappe.get_doc(MPESA_EXPRESS_REQUEST_DOCTYPE, document_name)
@@ -39,7 +47,11 @@ def transaction_status_on_success(response: dict, document_name: str, **kwargs) 
                 "status": status,
             },
         )
-        request_doc.reconcile_payment()
+        # Only money that arrived is reconciled, as stk_push_callback does. A refusal
+        # ran the paid handling too: a Payment Request marked Paid, and "Success"
+        # announced to the till for a push nobody paid.
+        if status == "Completed":
+            request_doc.reconcile_payment()
 
     except Exception:
         log_and_throw_error("MPESA Transaction Status Update Error", document_name)
