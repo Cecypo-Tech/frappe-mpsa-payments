@@ -60,6 +60,45 @@ def consume_for_stk_push(transid: str | None) -> None:
             frappe.log_error(frappe.get_traceback(), f"C2B row {name}: STK consume failed")
 
 
+def _awaiting_receipt(filters: dict) -> list:
+    """Completed pushes Safaricom confirmed without a receipt number (its status
+    query gives none), matching `filters`."""
+    return frappe.get_all(
+        "Mpesa Express Request",
+        filters={"status": "Completed", "transaction_id": ["is", "not set"], **filters},
+        fields=["name", "settings"],
+    )
+
+
+def adopt_receipt_for_push(push_name: str) -> None:
+    """A push confirmed paid without its receipt number: the register row already
+    holding its money - same account reference, amount and shortcode - becomes its
+    receipt and is consumed. Only a single match; anything else is left alone."""
+    push = frappe.db.get_value(
+        "Mpesa Express Request",
+        push_name,
+        ["name", "status", "transaction_id", "account_reference", "amount", "settings", "creation"],
+        as_dict=True,
+    )
+    if not push or push.status != "Completed" or push.transaction_id or not push.account_reference:
+        return
+    filters = {
+        "billrefnumber": push.account_reference,
+        "transamount": flt(push.amount),
+        "docstatus": 0,
+        "payment_entry": ["is", "not set"],
+        "creation": [">=", push.creation],
+    }
+    shortcode = push.settings and frappe.db.get_value("Mpesa Settings", push.settings, "business_shortcode")
+    if shortcode:
+        filters["businessshortcode"] = shortcode
+    rows = frappe.get_all("Mpesa C2B Payment Register", filters=filters, pluck="transid")
+    if len(rows) != 1 or not rows[0]:
+        return
+    frappe.db.set_value("Mpesa Express Request", push.name, "transaction_id", rows[0])
+    consume_for_stk_push(rows[0])
+
+
 class MpesaC2BPaymentRegister(Document):
     def before_insert(self):
         # An STK push and a paybill payment are the same money arriving. The
@@ -146,6 +185,8 @@ class MpesaC2BPaymentRegister(Document):
             as_dict=True,
         )
         if not push:
+            push = self._push_awaiting_this_receipt()
+        if not push:
             return False
 
         customer = _push_customer(push) or self.customer
@@ -165,6 +206,31 @@ class MpesaC2BPaymentRegister(Document):
         self.db_set(updates)
         self._submit_fresh_copy()
         return True
+
+    def _push_awaiting_this_receipt(self):
+        """The one push confirmed paid without a receipt number whose money this row
+        is - same account reference and amount, on its shortcode - now given this
+        receipt number; else None."""
+        if not self.billrefnumber:
+            return None
+        pushes = [
+            p
+            for p in _awaiting_receipt(
+                {"account_reference": self.billrefnumber, "amount": flt(self.transamount)}
+            )
+            if not p.settings
+            or frappe.db.get_value("Mpesa Settings", p.settings, "business_shortcode")
+            in (None, "", self.businessshortcode)
+        ]
+        if len(pushes) != 1:
+            return None
+        frappe.db.set_value("Mpesa Express Request", pushes[0].name, "transaction_id", self.transid)
+        return frappe.db.get_value(
+            "Mpesa Express Request",
+            pushes[0].name,
+            ["name", "reference_doctype", "reference_name"],
+            as_dict=True,
+        )
 
     def set_missing_values(self):
         self.currency = "KES"

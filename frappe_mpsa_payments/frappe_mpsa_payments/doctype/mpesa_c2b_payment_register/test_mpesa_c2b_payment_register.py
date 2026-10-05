@@ -766,3 +766,72 @@ class TestStkPushConsumesRegisterRow(FrappeTestCase):
         consume_stk_paid_register_rows.execute()
 
         self.assertEqual(self._state(row.name).docstatus, 1)
+
+
+class TestStkPushPaidWithoutItsReceipt(FrappeTestCase):
+    """Safaricom's status query says a push is paid but gives no receipt number.
+
+    The receipt arrives later as a C2B row whose account number is the push's
+    account reference: it becomes the push's receipt and is consumed, so it is
+    never offered as unspent money.
+    """
+
+    def setUp(self):
+        # Another test's push left behind would make the match ambiguous.
+        self.addCleanup(frappe.db.rollback)
+        TestStkPushConsumesRegisterRow.setUp(self)
+
+    _register = TestStkPushConsumesRegisterRow._register
+    _state = TestStkPushConsumesRegisterRow._state
+
+    def _push(self, **fields):
+        TestStkPushConsumesRegisterRow._push(self)
+        frappe.db.set_value(
+            "Mpesa Express Request",
+            f"MEXP-TEST-{self.transid}",
+            {"transaction_id": None, "account_reference": self.invoice.name, **fields},
+        )
+        return f"MEXP-TEST-{self.transid}"
+
+    def _receipt_of(self, push):
+        return frappe.db.get_value("Mpesa Express Request", push, "transaction_id")
+
+    def test_a_receipt_arriving_later_becomes_the_push_s(self):
+        push = self._push()
+        row = self._register()
+
+        self.assertEqual(self._receipt_of(push), self.transid)
+        state = self._state(row.name)
+        self.assertEqual(state.docstatus, 1)
+        self.assertFalse(state.payment_entry)
+
+    def test_a_receipt_already_in_the_register_becomes_the_push_s(self):
+        from frappe_mpsa_payments.frappe_mpsa_payments.api.mpesa_response_handler import (
+            transaction_status_on_success,
+        )
+
+        push = self._push(status="In Progress")
+        row = self._register()
+        self.assertEqual(self._state(row.name).docstatus, 0)
+
+        from frappe_mpsa_payments.frappe_mpsa_payments.doctype.mpesa_express_request.mpesa_express_request import (
+            MpesaExpressRequest,
+        )
+
+        # Its own reconciliation needs real Mpesa Settings; it is not what is tested here.
+        with patch.object(MpesaExpressRequest, "reconcile_payment"):
+            transaction_status_on_success(response={"ResultCode": "0"}, document_name=push)
+
+        self.assertEqual(self._receipt_of(push), self.transid)
+        self.assertEqual(self._state(row.name).docstatus, 1)
+
+    def test_another_account_or_amount_is_not_the_push_s(self):
+        for fields in ({"account_reference": "SO-OTHER"}, {"amount": 400}):
+            with self.subTest(fields=fields):
+                push = self._push(**fields)
+                row = self._register()
+                self.assertIsNone(self._receipt_of(push))
+                self.assertEqual(self._state(row.name).docstatus, 0)
+                frappe.db.rollback()
+                self.setUp()
+                self.transid = f"STK{frappe.generate_hash(length=7).upper()}"

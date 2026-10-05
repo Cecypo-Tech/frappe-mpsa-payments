@@ -52,6 +52,12 @@ def transaction_status_on_success(response: dict, document_name: str, **kwargs) 
         # announced to the till for a push nobody paid.
         if status == "Completed":
             request_doc.reconcile_payment()
+            # Safaricom's answer carries no receipt number: take it from the register.
+            from ..doctype.mpesa_c2b_payment_register.mpesa_c2b_payment_register import (
+                adopt_receipt_for_push,
+            )
+
+            adopt_receipt_for_push(document_name)
 
     except Exception:
         log_and_throw_error("MPESA Transaction Status Update Error", document_name)
