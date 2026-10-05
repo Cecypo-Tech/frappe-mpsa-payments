@@ -664,3 +664,105 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
             return getattr(alert, "name", alert)
 
         self.assertEqual([sent(c) for c in send.call_args_list], [alert_name])
+
+
+class TestStkPushConsumesRegisterRow(FrappeTestCase):
+    """An STK push and its C2B confirmation are the same money.
+
+    The confirmation arrives seconds after the push completes. Left a draft, the
+    register row was offered as unspent money by every picker that lists drafts,
+    so one payment could pay two sales.
+    """
+
+    def setUp(self):
+        self.invoice = frappe.db.get_value(
+            "Sales Invoice",
+            {"docstatus": 1, "is_return": 0},
+            ["name", "customer", "company"],
+            as_dict=True,
+            order_by="creation desc",
+        )
+        self.transid = f"STK{frappe.generate_hash(length=7).upper()}"
+
+    def _push(self, reference_name=None, reference_doctype="Sales Invoice"):
+        frappe.get_doc(
+            {
+                "doctype": "Mpesa Express Request",
+                "name": f"MEXP-TEST-{self.transid}",
+                "status": "Completed",
+                "docstatus": 1,
+                "transaction_id": self.transid,
+                "reference_doctype": reference_doctype,
+                "reference_name": reference_name or self.invoice.name,
+                "amount": 500,
+                "currency": "KES",
+            }
+        ).db_insert()
+
+    def _register(self):
+        doc = frappe.get_doc(
+            {
+                "doctype": "Mpesa C2B Payment Register",
+                "transid": self.transid,
+                "transamount": 500,
+                # No Mpesa Settings or register URL owns this shortcode, so
+                # set_missing_values leaves company and mode as given.
+                "businessshortcode": "STKTEST",
+                "billrefnumber": self.invoice.name,
+                "company": self.invoice.company,
+                "mode_of_payment": "Cash",
+            }
+        )
+        doc.insert(ignore_permissions=True)
+        return doc
+
+    def _state(self, name):
+        return frappe.db.get_value(
+            "Mpesa C2B Payment Register",
+            name,
+            ["docstatus", "payment_entry", "customer", "submit_payment"],
+            as_dict=True,
+        )
+
+    def test_a_confirmation_after_the_push_is_consumed_without_a_payment(self):
+        self._push()
+        row = self._register()
+
+        state = self._state(row.name)
+        self.assertEqual(state.docstatus, 1)
+        self.assertFalse(state.payment_entry)
+        self.assertFalse(state.submit_payment)
+        self.assertEqual(state.customer, self.invoice.customer)
+
+    def test_a_push_completing_after_the_confirmation_consumes_it(self):
+        from .mpesa_c2b_payment_register import consume_for_stk_push
+
+        row = self._register()
+        self.assertEqual(self._state(row.name).docstatus, 0)
+
+        self._push()
+        consume_for_stk_push(self.transid)
+
+        state = self._state(row.name)
+        self.assertEqual(state.docstatus, 1)
+        self.assertFalse(state.payment_entry)
+
+    def test_a_receipt_with_no_push_is_left_alone(self):
+        row = self._register()
+        self.assertEqual(self._state(row.name).docstatus, 0)
+
+    def test_a_push_naming_no_customer_leaves_the_row_draft(self):
+        self._push(reference_name="NO-SUCH-INVOICE")
+        row = self._register()
+        self.assertEqual(self._state(row.name).docstatus, 0)
+
+    def test_the_backfill_consumes_existing_drafts(self):
+        from frappe_mpsa_payments.frappe_mpsa_payments.patches import (
+            consume_stk_paid_register_rows,
+        )
+
+        row = self._register()
+        self._push()
+        consume_stk_paid_register_rows.execute()
+
+        self.assertEqual(self._state(row.name).docstatus, 1)

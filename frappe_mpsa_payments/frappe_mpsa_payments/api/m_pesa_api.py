@@ -441,6 +441,14 @@ def stk_push_callback(**kwargs) -> None:
 
         if status == "Completed":
             request_doc.reconcile_payment()
+            # Usually the C2B row arrives after this and consumes itself on
+            # insert; this covers it having arrived first. Imported here: the
+            # register module imports this one through payment_entry.
+            from ..doctype.mpesa_c2b_payment_register.mpesa_c2b_payment_register import (
+                consume_for_stk_push,
+            )
+
+            consume_for_stk_push(metadata_dict.get("MpesaReceiptNumber"))
 
         if "erpnext" in frappe.get_installed_apps():
             if request_doc and request_doc.reference_doctype == "Payment Request":

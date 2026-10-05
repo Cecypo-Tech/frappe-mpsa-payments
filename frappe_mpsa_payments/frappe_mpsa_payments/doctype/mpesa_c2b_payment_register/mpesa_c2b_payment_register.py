@@ -31,6 +31,35 @@ CUSTOMER_FIELD_BY_DOCTYPE = {
 DEFAULT_CUSTOMER_FIELD = "customer"
 
 
+def _push_customer(push) -> str | None:
+    """The customer a push was raised for, read off the document it names."""
+    field = "party" if push.reference_doctype == "Payment Request" else "customer"
+    if not push.reference_doctype or not push.reference_name:
+        return None
+    if not frappe.get_meta(push.reference_doctype).has_field(field):
+        return None
+    return frappe.db.get_value(push.reference_doctype, push.reference_name, field)
+
+
+def consume_for_stk_push(transid: str | None) -> None:
+    """A push completing after its C2B row arrived: consume the waiting row."""
+    if not transid:
+        return
+    for name in frappe.get_all(
+        "Mpesa C2B Payment Register",
+        filters={"transid": transid, "docstatus": 0},
+        pluck="name",
+    ):
+        try:
+            row = frappe.get_doc("Mpesa C2B Payment Register", name)
+            row.flags.ignore_permissions = True
+            row._consume_for_stk_push()
+        except Exception:
+            # The push itself succeeded; a row that would not submit is
+            # bookkeeping, not a reason to fail the payment.
+            frappe.log_error(frappe.get_traceback(), f"C2B row {name}: STK consume failed")
+
+
 class MpesaC2BPaymentRegister(Document):
     def before_insert(self):
         # An STK push and a paybill payment are the same money arriving. The
@@ -42,6 +71,11 @@ class MpesaC2BPaymentRegister(Document):
 
     def after_insert(self):
         try:
+            # Before the auto-reconcile check: a push's money is spent whether
+            # or not this shortcode reconciles on its own.
+            if self._consume_for_stk_push():
+                return
+
             auto_reconcile = frappe.db.get_value(
                 "Mpesa Settings",
                 {"business_shortcode": self.businessshortcode},
@@ -65,29 +99,72 @@ class MpesaC2BPaymentRegister(Document):
                 return
 
             self.db_set("submit_payment", 1)
+            self._submit_fresh_copy()
 
-            # Submit a fresh copy, not self. insert() is still running and calls
-            # the post-save methods for self once after_insert returns; a nested
-            # self.submit() left self marked as a submit, so on_submit and every
-            # submit hook ran a second time for each payment.
-            submitted = frappe.get_doc(self.doctype, self.name)
-            # Only the flags callers actually pass. Copying all of self.flags
-            # would also copy in_insert and the notification bookkeeping.
-            for flag in ("ignore_permissions", "ignore_links", "ignore_mandatory"):
-                submitted.flags[flag] = self.flags.get(flag)
-            submitted.submit()
-            # The copy sent its own Save and Submit alerts. Record them on self,
-            # or the outer insert's on_update sends every Save alert again.
+        except Exception as e:
+            frappe.log_error(frappe.get_traceback(), f"C2B Auto-submit Error: {str(e)}")
+
+    def _submit_fresh_copy(self):
+        # Submit a fresh copy, not self. insert() is still running and calls
+        # the post-save methods for self once after_insert returns; a nested
+        # self.submit() left self marked as a submit, so on_submit and every
+        # submit hook ran a second time for each payment.
+        submitted = frappe.get_doc(self.doctype, self.name)
+        # Only the flags callers actually pass. Copying all of self.flags
+        # would also copy in_insert and the notification bookkeeping.
+        for flag in ("ignore_permissions", "ignore_links", "ignore_mandatory"):
+            submitted.flags[flag] = self.flags.get(flag)
+        submitted.submit()
+        # The copy sent its own Save and Submit alerts. Record them on self,
+        # or the outer insert's on_update sends every Save alert again.
+        if self.flags.notifications_executed is not None:
             self.flags.notifications_executed.extend(
                 submitted.flags.notifications_executed or []
             )
 
-            # Callers such as the statement importer read the outcome off the
-            # document they inserted.
-            self.reload()
+        # Callers such as the statement importer read the outcome off the
+        # document they inserted.
+        self.reload()
 
-        except Exception as e:
-            frappe.log_error(frappe.get_traceback(), f"C2B Auto-submit Error: {str(e)}")
+    def _consume_for_stk_push(self) -> bool:
+        """Submit this row, with no Payment Entry, when an STK push took its money.
+
+        Safaricom confirms a push's payment through C2B too, a few seconds after
+        the push completes. The push already paid its sale - the POS payment row,
+        or the Payment Request's own entry, booked it - so this row is a record
+        of money already spent. Left a draft, every picker listing drafts offered
+        it as unspent, and one payment could pay a second sale.
+
+        Returns whether a completed push owns this receipt.
+        """
+        if not self.transid:
+            return False
+        push = frappe.db.get_value(
+            "Mpesa Express Request",
+            {"transaction_id": self.transid, "status": "Completed"},
+            ["name", "reference_doctype", "reference_name"],
+            as_dict=True,
+        )
+        if not push:
+            return False
+
+        customer = _push_customer(push) or self.customer
+        if not customer:
+            # before_submit requires one. Stays a draft, as it always was.
+            frappe.log_error(
+                f"{self.name} is the receipt of STK push {push.name}, whose "
+                f"{push.reference_doctype} {push.reference_name} names no customer. "
+                "Set the customer and submit it without a payment.",
+                "C2B row paid by STK push left draft",
+            )
+            return True
+
+        updates = {"customer": customer, "submit_payment": 0}
+        if push.reference_doctype == "Sales Invoice":
+            updates["sales_invoice"] = push.reference_name
+        self.db_set(updates)
+        self._submit_fresh_copy()
+        return True
 
     def set_missing_values(self):
         self.currency = "KES"
