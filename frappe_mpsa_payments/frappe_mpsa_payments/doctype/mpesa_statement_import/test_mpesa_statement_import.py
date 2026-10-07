@@ -445,3 +445,40 @@ class TestMpesaStatementImport(FrappeTestCase):
         self.assertIn("<td>Internal org transfer</td>", html)
         for receipt, _completion, _details in make_fixture.NEW_INTERNAL_TRANSFERS:
             self.assertIn(receipt, html)
+
+    def test_summary_keeps_the_reason_in_a_hover_not_a_column(self):
+        doc = self._new_import().insert()
+        result = dict(
+            NO_ROWS,
+            skipped=1,
+            failed=1,
+            details=[
+                {
+                    "row_index": 1,
+                    "receipt_no": "AAA",
+                    "amount": 10,
+                    "status": "skipped",
+                    "reference": "MPC2B-X",
+                    "reason": "Already present in Mpesa C2B Payment Register as MPC2B-X",
+                },
+                {
+                    "row_index": 2,
+                    "receipt_no": "BBB",
+                    "amount": 10,
+                    "status": "failed",
+                    "reference": None,
+                    "reason": "Customer not found",
+                },
+            ],
+        )
+
+        html = _render_summary(doc._get_parsed(), result)
+
+        self.assertNotIn("<th>Reference</th><th>Detail</th>", html)
+        self.assertIn(
+            'title="Already present in Mpesa C2B Payment Register as MPC2B-X"', html
+        )
+        self.assertNotIn(">Already present in", html)
+        # A failure's message is the only clue, so it stays readable.
+        self.assertIn(">Customer not found<", html)
+        self.assertIn("/desk/mpesa-c2b-payment-register/MPC2B-X", html)

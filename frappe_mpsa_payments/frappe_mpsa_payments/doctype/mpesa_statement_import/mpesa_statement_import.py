@@ -6,6 +6,7 @@ import json
 
 import frappe
 from frappe import _
+from frappe.desk.utils import slug
 from frappe.model.document import Document
 from frappe.utils import cint, escape_html, fmt_money, get_datetime, get_link_to_form
 
@@ -528,10 +529,9 @@ def _render_summary(parsed, result: dict) -> str:
             f"<td>{escape_html(str(detail.get('row_index', '')))}</td>"
             f"<td>{escape_html(str(detail.get('receipt_no') or ''))}</td>"
             f"<td style='text-align:right'>{escape_html(fmt_money(detail.get('amount') or 0, currency='KES'))}</td>"
-            f"<td>{escape_html(str(detail.get('status') or ''))}</td>"
+            f"<td>{_render_outcome(detail)}</td>"
             f"<td>{posted}</td>"
-            f"<td>{escape_html(str(reference))}</td>"
-            f"<td>{escape_html(str(detail.get('reason') or ''))}</td>"
+            f"<td style='white-space:nowrap'>{_render_reference(detail)}</td>"
             "</tr>"
         )
 
@@ -562,11 +562,38 @@ def _render_summary(parsed, result: dict) -> str:
         headline
         + "<table class='table table-bordered'><thead><tr>"
         + "<th>#</th><th>Receipt</th><th>Amount</th><th>Outcome</th><th>Posted</th>"
-        + "<th>Reference</th><th>Detail</th>"
+        + "<th>Reference</th>"
         + "</tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
         + _render_other_rows(parsed)
+    )
+
+
+def _render_outcome(detail: dict) -> str:
+    """The status word, with the reason on hover; a failure's reason is shown."""
+    status = escape_html(str(detail.get("status") or ""))
+    reason = escape_html(str(detail.get("reason") or ""))
+    if not reason:
+        return status
+    if detail.get("status") == importer.STATUS_FAILED:
+        return f"{status}<br><small class='text-muted'>{reason}</small>"
+    return f'<span title="{reason}" style="cursor:help;border-bottom:1px dotted">{status}</span>'
+
+
+def _render_reference(detail: dict) -> str:
+    """A relative desk link, so the stored summary survives a change of host."""
+    reference = detail.get("reference")
+    if not reference:
+        return ""
+    doctype = (
+        importer.EXPRESS_DOCTYPE
+        if detail.get("status") == importer.STATUS_BLOCKED
+        else importer.TARGET_DOCTYPE
+    )
+    return (
+        f'<a href="/desk/{slug(doctype)}/{escape_html(str(reference))}">'
+        f"{escape_html(str(reference))}</a>"
     )
 
 
