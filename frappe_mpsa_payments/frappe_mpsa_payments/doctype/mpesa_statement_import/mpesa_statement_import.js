@@ -110,7 +110,18 @@ function show_import_dialog(frm, preview) {
 		[__("Already imported (skipped)"), esc(preview.already_present)],
 		[__("Captured by an STK push (skipped)"), esc(preview.stk_captured)],
 		[__("Withdrawals to bank"), esc(preview.bank_withdrawal_count)],
-		[__("Not imported"), esc(preview.ignored_count)],
+		[
+			__("Internal org transfers (not imported)"),
+			`${esc(preview.internal_transfer_count)} <span class="text-muted">${__(
+				"money moved between this organisation's own M-Pesa accounts, not customer payments"
+			)}</span>`,
+		],
+		[
+			__("Other rows not imported"),
+			`${esc(preview.ignored_count - preview.internal_transfer_count)} <span class="text-muted">${__(
+				"listed with a reason in the summary after import"
+			)}</span>`,
+		],
 	]
 		.map(([label, value]) => `<tr><th>${label}</th><td>${value}</td></tr>`)
 		.join("");

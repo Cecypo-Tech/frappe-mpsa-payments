@@ -174,6 +174,9 @@ class MpesaStatementImport(Document):
             "already_present": len(present),
             "stk_captured": len(captured),
             "bank_withdrawal_count": len(parsed.bank_withdrawals or []),
+            "internal_transfer_count": sum(
+                row.reason == "Internal org transfer" for row in parsed.ignored_rows or []
+            ),
             "ignored_count": len(parsed.ignored_rows or []),
         }
 
@@ -592,9 +595,16 @@ def _render_other_rows(parsed) -> str:
     ignored = getattr(parsed, "ignored_rows", None) or []
     if ignored:
         html += (
-            "<p><b>Not imported</b> &mdash; Safaricom-internal transfers and any other row "
-            "that is not a customer payment.</p><table class='table table-bordered'><thead><tr>"
-            "<th>Receipt</th><th>Time</th><th>Paid In</th><th>Withdrawn</th><th>Detail</th>"
+            "<p><b>Not imported</b> &mdash; these rows are not customer payments. "
+            "<i>Internal org transfer</i>: money Safaricom moved between this "
+            "organisation's own M-Pesa accounts (e.g. Utility &rarr; Settlement); each "
+            "sweep shows as a Paid In row and its Withdrawn twin. "
+            "<i>Outgoing charge or transfer</i>: money leaving the account. "
+            "<i>Unrecognised inflow</i>: money in whose Details do not read like a "
+            "customer payment &mdash; check it by hand.</p>"
+            "<table class='table table-bordered'><thead><tr>"
+            "<th>Receipt</th><th>Time</th><th>Paid In</th><th>Withdrawn</th><th>Reason</th>"
+            "<th>Detail</th>"
             "</tr></thead><tbody>"
             + "".join(
                 "<tr>"
@@ -602,6 +612,7 @@ def _render_other_rows(parsed) -> str:
                 f"<td>{escape_html(i.completion_time)}</td>"
                 f"<td style='text-align:right'>{escape_html(fmt_money(i.paid_in, currency='KES'))}</td>"
                 f"<td style='text-align:right'>{escape_html(fmt_money(i.withdrawn, currency='KES'))}</td>"
+                f"<td>{escape_html(getattr(i, 'reason', '') or '')}</td>"
                 f"<td>{escape_html(i.details)}</td>"
                 "</tr>"
                 for i in ignored

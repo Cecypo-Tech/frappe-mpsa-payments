@@ -805,3 +805,21 @@ def test_csv_field_with_a_line_break_inside_quotes_stays_one_row(tmp_path):
     result = parse_statement(str(path))
     assert result.total_rows == 1
     assert [row.receipt_no for row in result.payment_rows] == ["AAA"]
+
+
+def test_ignored_rows_say_why_they_were_not_imported():
+    result = parse_rows(
+        [
+            ["Receipt No", "Completion Time", "Details", "Paid In (KSHs)", "Withdrawn (KSHs)"],
+            ["AAA", "01/01/2020 10:00:00", "Utility Account to Organization Settlement Account", "500.00", "0.00"],
+            ["AAA", "01/01/2020 10:00:00", "Utility Account to Organization Settlement Account", "0.00", "-500.00"],
+            ["BBB", "01/01/2020 10:00:00", "Organization Funds Transfer from 600000 - OWN Acc. x", "50.00", "0.00"],
+            ["CCC", "01/01/2020 10:00:00", "Charge for transfer to bank", "0.00", "-50.00"],
+            ["DDD", "01/01/2020 10:00:00", "Some New Sweep", "70.00", "0.00"],
+        ]
+    )
+    reasons = [(row.receipt_no, row.reason) for row in result.ignored_rows]
+    internal = "Internal org transfer"
+    assert [r for _receipt, r in reasons[:3]] == [internal] * 3
+    assert reasons[3] == ("CCC", "Outgoing charge or transfer")
+    assert reasons[4] == ("DDD", "Unrecognised inflow")

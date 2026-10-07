@@ -293,6 +293,10 @@ class TestMpesaStatementImport(FrappeTestCase):
         self.assertEqual(preview["stk_captured"], 0)
         self.assertEqual(preview["bank_withdrawal_count"], 1)
         self.assertEqual(preview["ignored_count"], len(parsed.ignored_rows))
+        # Each fixture sweep is a Paid In row plus its Withdrawn twin.
+        self.assertEqual(
+            preview["internal_transfer_count"], 2 * len(make_fixture.NEW_INTERNAL_TRANSFERS)
+        )
 
     def test_import_preview_counts_only_payments_it_will_create(self):
         """Rows the importer skips or blocks are not counted as new."""
@@ -438,5 +442,6 @@ class TestMpesaStatementImport(FrappeTestCase):
         self.assertIn("Withdrawals to bank", html)
         self.assertIn(make_fixture.NEW_BANK_WITHDRAWAL[0], html)
         self.assertIn("Not imported", html)
+        self.assertIn("<td>Internal org transfer</td>", html)
         for receipt, _completion, _details in make_fixture.NEW_INTERNAL_TRANSFERS:
             self.assertIn(receipt, html)

@@ -105,6 +105,7 @@ class IgnoredRow:
     withdrawn: float = 0.0
     details: str = ""
     row_index: int = -1
+    reason: str = ""
 
 
 @dataclass
@@ -190,6 +191,13 @@ _PAYMENT_TYPES = {
 }
 
 _BANK_WITHDRAWAL = re.compile(r"\bwithdrawal\s+of\s+funds\s+to\s+bank\b", re.IGNORECASE)
+
+#: Money moving between the organisation's own M-Pesa accounts: "Utility
+#: Account to Organization Settlement Account", "Organization Funds Transfer".
+_INTERNAL_TRANSFER = re.compile(
+    r"\baccount\s+to\s+organi[sz]ation\b|^organi[sz]ation\s+funds\s+transfer\b",
+    re.IGNORECASE,
+)
 
 #: ``Statements for 160745 from 2026-10-01 to 2026-10-01 (1).csv``
 _FILE_NAME_METADATA = re.compile(
@@ -631,6 +639,13 @@ def _parse_sheet(sheet: object) -> ParsedStatement:
                     withdrawn=withdrawn,
                     details=details,
                     row_index=row,
+                    reason=(
+                        "Internal org transfer"
+                        if _INTERNAL_TRANSFER.search(details)
+                        else "Outgoing charge or transfer"
+                        if amount <= 0
+                        else "Unrecognised inflow"
+                    ),
                 )
             )
             continue
