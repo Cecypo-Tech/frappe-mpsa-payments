@@ -7,9 +7,7 @@ from frappe.model.document import Document
 from frappe.utils import flt
 
 from frappe_mpsa_payments.frappe_mpsa_payments.api.payment_entry import (
-    create_and_reconcile_payment_reconciliation,
     create_payment_entry,
-    get_outstanding_invoices,
 )
 
 # Used when Mpesa Settings has no Reconciliation Priority rows. Reproduces the
@@ -509,38 +507,17 @@ class MpesaC2BPaymentRegister(Document):
         if not settings.auto_reconcile_c2b or not self.payment_entry:
             return
 
-        invoice, order = self._get_matching_refs()
+        _, order = self._get_matching_refs()
 
         if order and settings.auto_create_sales_invoice:
             if self._order_is_settled(order) and not self._order_already_billed(order):
                 self._create_sales_invoice_from_order(order)
 
-        elif self._has_unallocated_funds():
-            # Fallback: FIFO
-            outstanding_invoices = get_outstanding_invoices(
-                customer=self.customer, company=self.company
-            )
-
-            if outstanding_invoices:
-                self._reconcile_against_invoice(outstanding_invoices)
-
-    def _has_unallocated_funds(self) -> bool:
-        """Is any of this payment still looking for an invoice to settle?
-
-        Another flow can own the Payment Entry - a POS or quick-pay screen
-        that builds and allocates it against an order before submitting this
-        record. There is then nothing left to reconcile, and handing an empty
-        allocation to the Payment Reconciliation tool is what makes it throw
-        "No records found in Allocation table".
-        """
-        return (
-            flt(
-                frappe.db.get_value(
-                    "Payment Entry", self.payment_entry, "unallocated_amount"
-                )
-            )
-            > 0
-        )
+        # Nothing else: an exact reference match was already allocated when the
+        # Payment Entry was built (_allocation_for). Anything unmatched stays an
+        # unallocated advance for someone to reconcile by hand - it used to be
+        # spread FIFO over the oldest invoices, which settled the wrong ones
+        # (PAY-18537).
 
     def _get_matching_refs(self):
         """
@@ -663,14 +640,3 @@ class MpesaC2BPaymentRegister(Document):
 
         frappe.db.release_savepoint(savepoint)
         return si.name
-
-    def _reconcile_against_invoice(self, invoice_list):
-        if isinstance(invoice_list, str):
-            invoice_list = [invoice_list]
-
-        create_and_reconcile_payment_reconciliation(
-            outstanding_invoices=invoice_list,
-            customer=self.customer,
-            company=self.company,
-            payment_entries=[self.payment_entry],
-        )

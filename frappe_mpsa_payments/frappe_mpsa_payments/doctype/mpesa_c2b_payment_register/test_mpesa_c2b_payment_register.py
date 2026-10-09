@@ -361,6 +361,33 @@ class TestMpesaC2BPaymentRegister(FrappeTestCase):
 
         self.assertEqual(doc._allocation_for(None, None), [])
 
+    def test_an_unmatched_payment_is_never_spread_over_old_invoices(self):
+        """No reference match means the payment stays unallocated.
+
+        It used to fall back to FIFO and settle the customer's oldest invoice,
+        which put a payment meant for one invoice against another (PAY-18537).
+        """
+        doc = self._register(transamount=44060, customer="Some Customer")
+        doc.payment_entry = "PAY-0001"
+        settings = frappe._dict(auto_reconcile_c2b=1, auto_create_sales_invoice=1)
+
+        with (
+            patch("frappe.get_cached_value", return_value=settings),
+            patch.object(type(doc), "_get_matching_refs", return_value=(None, None)),
+            patch("frappe.db.get_value", return_value=44060),
+            patch(
+                f"{MODULE}.get_outstanding_invoices",
+                return_value=["INV-OLDEST"],
+                create=True,
+            ),
+            patch(
+                f"{MODULE}.create_and_reconcile_payment_reconciliation", create=True
+            ) as reconcile,
+        ):
+            doc._reconcile_payment()
+
+        reconcile.assert_not_called()
+
     def test_a_reference_that_vanished_takes_no_allocation(self):
         doc = self._register(transamount=15120)
 
