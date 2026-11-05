@@ -129,6 +129,8 @@ def create_payment_entry(
 
     pe.setup_party_account_field()
     pe.set_missing_values()
+    # set_amounts() divides by the exchange rate, so it must be set first.
+    pe.set_exchange_rate()
     pe.set_amounts()
 
     if references:

@@ -74,3 +74,25 @@ class TestPaymentFunctions(FrappeTestCase):
 
         self.assertEqual(paid_amount, 100.00)
         self.assertEqual(received_amount, 13000.0)
+
+
+class TestCreatePaymentEntry(FrappeTestCase):
+    """ERPNext's set_unallocated_amount (Nov 2026) divides by the entry's exchange
+    rate unconditionally, so set_amounts() before the rate was set crashed every
+    M-Pesa receipt with "unsupported operand type(s) for /: 'float' and 'NoneType'"."""
+
+    def setUp(self):
+        frappe.set_user("Administrator")
+        TestPaymentFunctions.setUp(self)
+
+    def test_receipt_payment_entry_gets_its_exchange_rate(self):
+        from .payment_entry import create_payment_entry
+
+        currency = frappe.get_cached_value("Company", COMPANY, "default_currency")
+        pe = create_payment_entry(
+            COMPANY, CUSTOMER, 100, currency, "Cash",
+            party_type="Customer", reference_no="TEST-RATE", reference_date=frappe.utils.nowdate(),
+        )
+
+        self.assertEqual(pe.source_exchange_rate, 1)
+        self.assertEqual(pe.unallocated_amount, 100)
