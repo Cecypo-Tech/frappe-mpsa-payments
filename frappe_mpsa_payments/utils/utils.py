@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 import frappe
 from frappe import _
-from frappe.utils import get_request_site_address
+from frappe.utils import flt, get_request_site_address
 
 from .doctype_names import ACCESS_TOKENS_DOCTYPE, MPESA_EXPRESS_REQUEST_DOCTYPE
 
@@ -213,7 +213,14 @@ def handle_successful_transaction(request_doc, settings):
     ):
         return
 
-    if request_doc.get("reference_doctype") and request_doc.get("reference_name"):
+    # A Payment Request is settled by its Payment Entry below. on_payment_authorized
+    # marks a Phone-channel request Paid with nothing outstanding and books no entry,
+    # after which ERPNext refuses the entry as more than the request's outstanding.
+    if (
+        request_doc.get("reference_doctype")
+        and request_doc.get("reference_name")
+        and request_doc.reference_doctype != "Payment Request"
+    ):
         frappe.get_doc(
             request_doc.get("reference_doctype"), request_doc.get("reference_name")
         ).run_method("on_payment_authorized", "Completed")
@@ -236,14 +243,19 @@ def handle_successful_transaction(request_doc, settings):
                         log_and_throw_error(
                             "Payment Request Submission Error", request_doc.name
                         )
-            try:
-                payment_request.create_payment_entry()
-            except Exception:
-                log_and_throw_error("Payment Entry Creation Error", request_doc.name)
+            # Nothing outstanding: an earlier callback already booked it.
+            booked = False
+            if flt(payment_request.outstanding_amount) > 0:
+                try:
+                    payment_request.create_payment_entry()
+                    booked = True
+                except Exception:
+                    log_and_throw_error("Payment Entry Creation Error", request_doc.name)
 
             try:
                 if (
-                    settings.auto_create_sales_invoice
+                    booked
+                    and settings.auto_create_sales_invoice
                     and payment_request.reference_doctype == "Sales Order"
                 ):
                     from erpnext.selling.doctype.sales_order.sales_order import (

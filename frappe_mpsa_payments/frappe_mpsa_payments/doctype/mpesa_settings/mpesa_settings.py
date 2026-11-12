@@ -369,8 +369,8 @@ def generate_stk_push(**kwargs) -> str | Any:
 
 
 def sanitize_mobile_number(number: str) -> str:
-    """Add country code and strip leading zeroes from the phone number."""
-    return "254" + str(number).lstrip("0")
+    """254 and the last nine digits, whichever of 07.., 254.., +254 .. was typed."""
+    return "254" + "".join(filter(str.isdigit, str(number)))[-9:]
 
 
 def get_completed_integration_requests_info(
