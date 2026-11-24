@@ -160,64 +160,6 @@ frappe.listview_settings["Mpesa C2B Payment Register"] = {
 			);
 		});
 
-		// Paste a list of M-Pesa receipt numbers (from a statement, SMS, email)
-		// and filter the list down to them; reports any that are not recorded.
-		listview.page.add_inner_button(__("Filter by Trans IDs"), function () {
-			frappe.prompt(
-				{
-					label: __("Transaction IDs"),
-					fieldname: "ids",
-					fieldtype: "Small Text",
-					reqd: 1,
-					description: __("One per line, or separated by spaces or commas."),
-				},
-				({ ids }) => {
-					const trans_ids = [
-						...new Set(ids.toUpperCase().split(/[\s,;]+/).filter(Boolean)),
-					];
-					if (!trans_ids.length) return;
-
-					// Replace only a previous Trans ID filter; keep the rest so a
-					// saved report (e.g. a "Pending" view) keeps its own conditions.
-					listview.filter_area
-						.remove("transid")
-						.then(() =>
-							listview.filter_area.add([
-								[listview.doctype, "transid", "in", trans_ids],
-							])
-						);
-
-					frappe.db
-						.get_list(listview.doctype, {
-							filters: { transid: ["in", trans_ids] },
-							fields: ["transid"],
-							limit: trans_ids.length * 2,
-						})
-						.then((rows) => {
-							const found = new Set(rows.map((r) => r.transid.toUpperCase()));
-							const missing = trans_ids.filter((id) => !found.has(id));
-							if (missing.length) {
-								frappe.msgprint({
-									title: __("{0} of {1} not found", [
-										missing.length,
-										trans_ids.length,
-									]),
-									message: missing.join("<br>"),
-									indicator: "orange",
-								});
-							} else {
-								frappe.show_alert({
-									message: __("All {0} found", [trans_ids.length]),
-									indicator: "green",
-								});
-							}
-						});
-				},
-				__("Filter by Trans IDs"),
-				__("Filter")
-			);
-		});
-
 		// Same pull as Mpesa Settings > Pull Transactions, only it asks which
 		// account to use instead of taking it from the open document.
 		listview.page.add_inner_button(__("Pull Transactions"), function () {
