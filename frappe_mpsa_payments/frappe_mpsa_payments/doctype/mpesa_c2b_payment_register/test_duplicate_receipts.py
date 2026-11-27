@@ -287,3 +287,77 @@ class TestExistingTwins(FrappeTestCase):
             frappe.get_all(REGISTER, {"name": ["in", names]}, ["name", "docstatus", "modified"]),
             before,
         )
+
+
+class TestTwinCannotBeSubmitted(FrappeTestCase):
+    """Review finding: a draft twin opened from the desk list, or sent through
+    submit_mpesa_payment, could still be submitted and book the receipt again."""
+
+    def test_draft_twin_refuses_submit(self):
+        company = frappe.db.get_value("Company", {}, "name")
+        submitted, draft = _twin_pair("DUPSB", company)
+        doc = frappe.get_doc(REGISTER, draft)
+        doc.customer = frappe.db.get_value("Customer", {}, "name")
+        with self.assertRaisesRegex(frappe.ValidationError, submitted):
+            doc.submit()
+
+
+class TestDeadlockIsRetried(FrappeTestCase):
+    """Review finding: the locking re-check takes a gap lock, and the register's naming
+    series row is locked until commit, so a pull inserting several receipts and a
+    callback inserting one can deadlock. The callback must hand the deadlock to the
+    job runner to retry, not log it and drop the receipt."""
+
+    TRANSIDS = ("ZZDLK1", "ZZDLK5", "ZZDLK9")
+
+    def tearDown(self):
+        frappe.db.rollback()
+        frappe.db.delete(REGISTER, {"transid": ["in", self.TRANSIDS]})
+        frappe.db.commit()
+
+    def test_callback_deadlock_is_retried(self):
+        real_after_insert = reg.MpesaC2BPaymentRegister.after_insert
+
+        def slow_first(doc):
+            real_after_insert(doc)
+            if doc.transid == "ZZDLK1":
+                time.sleep(2.5)  # holds the series row while the callback arrives
+
+        def pull():  # one transaction, two receipts, like the pull loop
+            _row("ZZDLK1")
+            _row("ZZDLK9")
+            return "pulled"
+
+        def callback():
+            m_pesa_api.delayed_insert_c2b(
+                {"transid": "ZZDLK5", "transamount": 100, "businessshortcode": SHORTCODE}
+            )
+            return "inserted"
+
+        results = {}
+        with patch.object(reg.MpesaC2BPaymentRegister, "after_insert", slow_first):
+            a = threading.Thread(
+                target=_in_connection,
+                args=(frappe.local.site, frappe.local.sites_path, pull, results, "pull"),
+            )
+            b = threading.Thread(
+                target=_in_connection,
+                args=(frappe.local.site, frappe.local.sites_path, callback, results, "callback"),
+            )
+            a.start()
+            time.sleep(0.3)
+            b.start()
+            a.join(30)
+            b.join(30)
+
+        self.assertEqual(results["pull"], "pulled")
+        # Either the callback won outright, or it lost the deadlock and asked for a retry.
+        if results["callback"] != "inserted":
+            self.assertIsInstance(results["callback"], frappe.RetryBackgroundJobError)
+        self.assertEqual(
+            frappe.db.count("Error Log", {"method": "Delayed C2B Insert Error", "creation": [">", self.started]}),
+            0,
+        )
+
+    def setUp(self):
+        self.started = frappe.utils.now_datetime()

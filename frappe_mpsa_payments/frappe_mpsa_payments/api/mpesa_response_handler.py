@@ -337,6 +337,12 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
                 duplicate_transids.append(transid)
                 skipped += 1
                 continue
+            except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+                # The database ended this transaction (or another inserter holds the
+                # receipt): every row inserted so far is gone, so the rest of the loop
+                # would report rows that do not exist. Stop; the next pull retries.
+                frappe.db.rollback()
+                raise
 
             created_records.append(
                 {

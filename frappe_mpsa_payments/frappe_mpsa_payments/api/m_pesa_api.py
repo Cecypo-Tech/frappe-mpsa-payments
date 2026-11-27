@@ -619,6 +619,12 @@ def delayed_insert_c2b(c2b_data: dict) -> None:
     except DuplicateReceiptError:
         # Safaricom retried, or a pull recorded the receipt first.
         frappe.db.rollback()
+    except (frappe.QueryDeadlockError, frappe.QueryTimeoutError) as e:
+        # A pull inserting at the same moment (the receipt check's gap lock against the
+        # naming series lock), or another inserter holding this receipt: run the job
+        # again rather than drop the receipt.
+        frappe.db.rollback()
+        raise frappe.RetryBackgroundJobError(str(e)) from e
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Delayed C2B Insert Error")
 

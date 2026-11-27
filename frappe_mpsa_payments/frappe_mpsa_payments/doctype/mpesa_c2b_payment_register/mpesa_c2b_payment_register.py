@@ -342,6 +342,20 @@ class MpesaC2BPaymentRegister(Document):
                 self._find_customer_from_billref(self.billrefnumber)
 
     def before_submit(self):
+        # One receipt, one submitted row: a draft copy left by the callback/pull race
+        # would otherwise book the same money a second time.
+        if self.transid:
+            twin = frappe.db.get_value(
+                "Mpesa C2B Payment Register",
+                {"transid": self.transid, "docstatus": 1, "name": ["!=", self.name]},
+                "name",
+            )
+            if twin:
+                frappe.throw(
+                    _("M-Pesa receipt {0} is already recorded as {1}; {2} is a duplicate copy and cannot be submitted.").format(
+                        self.transid, twin, self.name
+                    )
+                )
         if not self.transamount:
             frappe.throw(_("Trans Amount is required"))
         if "erpnext" not in frappe.get_installed_apps():
