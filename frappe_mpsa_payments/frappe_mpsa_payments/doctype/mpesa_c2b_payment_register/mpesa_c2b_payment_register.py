@@ -73,6 +73,39 @@ def claim_receipt(transid: str | None) -> None:
     frappe.db.after_rollback.add(release)
 
 
+def live_twin(name: str) -> str | None:
+    """The submitted row that already holds a draft row's receipt, else None.
+
+    Before the insert guard, one receipt could land twice. The draft copy is money
+    already recorded (or spent) through its twin, so nothing may offer or use it.
+    """
+    row = frappe.db.get_value(
+        "Mpesa C2B Payment Register", name, ["transid", "docstatus"], as_dict=True
+    )
+    if not row or row.docstatus != 0 or not row.transid:
+        return None
+    return frappe.db.get_value(
+        "Mpesa C2B Payment Register",
+        {"transid": row.transid, "docstatus": 1, "name": ["!=", name]},
+        "name",
+    )
+
+
+def drafts_without_twins(rows: list[dict]) -> list[dict]:
+    """Listed draft rows, less those whose receipt already has a submitted row."""
+    transids = list({r.get("transid") for r in rows if r.get("transid")})
+    if not transids:
+        return rows
+    twinned = set(
+        frappe.get_all(
+            "Mpesa C2B Payment Register",
+            filters={"transid": ["in", transids], "docstatus": 1},
+            pluck="transid",
+        )
+    )
+    return [r for r in rows if r.get("transid") not in twinned]
+
+
 def _push_customer(push) -> str | None:
     """The customer a push was raised for, read off the document it names."""
     field = "party" if push.reference_doctype == "Payment Request" else "customer"

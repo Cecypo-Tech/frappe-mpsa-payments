@@ -672,11 +672,15 @@ def get_mpesa_draft_c2b_payments(
     elif to_date:
         filters["posting_date"] = ["<=", to_date]
 
+    from ..doctype.mpesa_c2b_payment_register.mpesa_c2b_payment_register import (
+        drafts_without_twins,
+    )
+
     payments = frappe.get_all(
         "Mpesa C2B Payment Register", filters=filters, fields=fields, order_by=order_by
     )
 
-    return payments
+    return drafts_without_twins(payments)
 
 
 @frappe.whitelist()

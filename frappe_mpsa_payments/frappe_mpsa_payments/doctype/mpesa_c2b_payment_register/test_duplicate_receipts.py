@@ -201,3 +201,89 @@ class TestReceiptLockAcrossConnections(FrappeTestCase):
         with patch.object(reg, "RECEIPT_LOCK_TIMEOUT", 1):
             self._thread(lambda: claim_receipt("DUPTEST05"), results, "other").join(10)
         self.assertIsInstance(results["other"], frappe.QueryTimeoutError)
+
+
+def _twin_pair(prefix, company):
+    """A submitted row and a draft row for one receipt, as the race left them:
+    written below the insert guard, which would refuse the second."""
+    transid = f"{prefix}{frappe.generate_hash(length=5).upper()}"
+    names = []
+    for docstatus in (1, 0):
+        doc = frappe.get_doc(
+            {
+                "doctype": REGISTER,
+                "name": f"{transid}-{docstatus}",
+                "transid": transid,
+                "transamount": 100,
+                "businessshortcode": SHORTCODE,
+                "company": company,
+                "mode_of_payment": "Cash",
+                "docstatus": docstatus,
+            }
+        )
+        doc.db_insert()
+        names.append(doc.name)
+    return names  # [submitted, draft]
+
+
+class TestExistingTwins(FrappeTestCase):
+    """Duplicates already on a site: the draft copy must not be spendable."""
+
+    def setUp(self):
+        self.company = frappe.db.get_value("Company", {}, "name")
+
+    def test_live_twin_names_the_submitted_row(self):
+        submitted, draft = _twin_pair("DUPTW", self.company)
+        self.assertEqual(reg.live_twin(draft), submitted)
+        self.assertIsNone(reg.live_twin(submitted))
+
+    def test_draft_twin_hidden_from_picker(self):
+        _, draft = _twin_pair("DUPTW", self.company)
+        listed = m_pesa_api.get_mpesa_draft_c2b_payments(self.company)
+        self.assertNotIn(draft, [p.name for p in listed])
+
+    def test_quick_pay_refuses_draft_twin(self):
+        from frappe_mpsa_payments.frappe_mpsa_payments.api import mpesa_quick_pay
+
+        submitted, draft = _twin_pair("DUPTW", self.company)
+        invoice = frappe._dict(docstatus=0, company=self.company)
+        real_get_doc = frappe.get_doc
+
+        def get_doc(doctype, *args, **kwargs):
+            if doctype == "Sales Invoice":
+                return invoice
+            return real_get_doc(doctype, *args, **kwargs)
+
+        frappe.form_dict.update(
+            {"doctype": "Sales Invoice", "invoice_name": "X", "mpesa_payments": draft}
+        )
+        try:
+            with patch.object(mpesa_quick_pay.frappe, "get_doc", side_effect=get_doc):
+                with self.assertRaisesRegex(frappe.ValidationError, submitted):
+                    mpesa_quick_pay.process_mpesa()
+        finally:
+            for key in ("doctype", "invoice_name", "mpesa_payments"):
+                frappe.form_dict.pop(key, None)
+
+    def test_patch_reports_without_touching(self):
+        from frappe_mpsa_payments.frappe_mpsa_payments.patches import (
+            report_duplicate_receipts,
+        )
+
+        names = _twin_pair("DUPRP", self.company)
+        before = frappe.get_all(REGISTER, {"name": ["in", names]}, ["name", "docstatus", "modified"])
+        captured = []
+        with patch.object(
+            report_duplicate_receipts.frappe,
+            "log_error",
+            side_effect=lambda **kw: captured.append(kw),
+        ):
+            report_duplicate_receipts.execute()
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0]["title"], "M-Pesa duplicate receipts")
+        self.assertIn(frappe.db.get_value(REGISTER, names[0], "transid"), captured[0]["message"])
+        self.assertEqual(
+            frappe.get_all(REGISTER, {"name": ["in", names]}, ["name", "docstatus", "modified"]),
+            before,
+        )
