@@ -602,6 +602,10 @@ def delayed_insert_c2b(c2b_data: dict) -> None:
     This ensures that any Express Request with the same transaction_id
     is already created and can be prioritized.
     """
+    from ..doctype.mpesa_c2b_payment_register.mpesa_c2b_payment_register import (
+        DuplicateReceiptError,
+    )
+
     try:
         time.sleep(1)
 
@@ -612,6 +616,9 @@ def delayed_insert_c2b(c2b_data: dict) -> None:
         doc.insert(ignore_permissions=True)
         frappe.db.commit()
 
+    except DuplicateReceiptError:
+        # Safaricom retried, or a pull recorded the receipt first.
+        frappe.db.rollback()
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Delayed C2B Insert Error")
 
@@ -819,6 +826,10 @@ def handle_transaction_status_result():
 
 def process_mpesa_integration_request(integration_request_name):
     """Process the Mpesa Integration Request and publish updates in real-time"""
+    from ..doctype.mpesa_c2b_payment_register.mpesa_c2b_payment_register import (
+        DuplicateReceiptError,
+    )
+
     try:
         # Fetch the Integration Request
         integration_request = frappe.get_doc(
@@ -882,7 +893,18 @@ def process_mpesa_integration_request(integration_request_name):
             mpesa_doc.middlename = name_parts[1] if len(name_parts) > 1 else ""
             mpesa_doc.lastname = name_parts[-1] if len(name_parts) > 2 else ""
 
-            mpesa_doc.insert(ignore_permissions=True)
+            try:
+                mpesa_doc.insert(ignore_permissions=True)
+            except DuplicateReceiptError:
+                frappe.db.rollback()
+                integration_request.reload()
+                integration_request.status = "Failed"
+                integration_request.output = (
+                    f"Duplicate transaction: Receipt No {receipt_no} already exists"
+                )
+                integration_request.save(ignore_permissions=True)
+                frappe.db.commit()
+                return
             frappe.db.commit()
 
             success_msg = "Transaction processed successfully"

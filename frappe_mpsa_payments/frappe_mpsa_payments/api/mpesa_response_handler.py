@@ -297,6 +297,10 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
     # shape assumed at plan time.
     transactions = _flatten_pull_transactions(response.get("Response", []))
 
+    from ..doctype.mpesa_c2b_payment_register.mpesa_c2b_payment_register import (
+        DuplicateReceiptError,
+    )
+
     created, skipped, failed = 0, 0, 0
     created_records = []
     duplicate_transids = []
@@ -326,7 +330,13 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
             doc.businessshortcode = shortcode
             doc.billrefnumber = txn.get("billreference", "")
             doc.transactiontype = txn.get("transactiontype", "")
-            doc.insert(ignore_permissions=True)
+            try:
+                doc.insert(ignore_permissions=True)
+            except DuplicateReceiptError:
+                # The C2B callback recorded it after the check above.
+                duplicate_transids.append(transid)
+                skipped += 1
+                continue
 
             created_records.append(
                 {

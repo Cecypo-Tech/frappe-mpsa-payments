@@ -28,6 +28,50 @@ CUSTOMER_FIELD_BY_DOCTYPE = {
 }
 DEFAULT_CUSTOMER_FIELD = "customer"
 
+# Seconds an insert waits for another connection that is inserting the same receipt.
+RECEIPT_LOCK_TIMEOUT = 10
+
+
+class DuplicateReceiptError(frappe.DuplicateEntryError):
+    """The receipt already has a live (draft or submitted) register row."""
+
+
+def _get_lock(key: str, timeout: int) -> bool:
+    return frappe.db.sql("SELECT GET_LOCK(%s, %s)", (key, timeout))[0][0] == 1
+
+
+def claim_receipt(transid: str | None) -> None:
+    """Hold this receipt for the current transaction, so only one connection at a time
+    can check for and insert its register row.
+
+    The C2B callback and a Pull Transactions used to insert the same receipt a second
+    apart: each checked "exists?" before the other had committed, and the receipt
+    landed twice - one copy a draft the till offered as unspent money. The lock is held
+    until this transaction commits or rolls back, so the loser's check sees the winner's
+    row. A unique index would do this too, but sites already holding duplicates (or a
+    cancelled twin) could then not migrate.
+    """
+    if not transid:
+        return
+    # MariaDB lock names are server-wide and at most 64 characters.
+    key = f"c2b:{frappe.conf.db_name}:{transid}"[:64]
+    held = frappe.db.__dict__.setdefault("_c2b_receipt_locks", set())
+    if key in held:
+        return
+    if not _get_lock(key, RECEIPT_LOCK_TIMEOUT):
+        raise frappe.QueryTimeoutError(
+            _("M-Pesa receipt {0} is being recorded by another process; try again.").format(transid)
+        )
+    held.add(key)
+
+    def release():
+        if key in held:
+            held.discard(key)
+            frappe.db.sql("SELECT RELEASE_LOCK(%s)", (key,))
+
+    frappe.db.after_commit.add(release)
+    frappe.db.after_rollback.add(release)
+
 
 def _push_customer(push) -> str | None:
     """The customer a push was raised for, read off the document it names."""
@@ -104,6 +148,18 @@ class MpesaC2BPaymentRegister(Document):
         # same receipt, which kept the payment out of the register entirely and
         # meant nothing ever reconciled. The register now owns the payment; the
         # Express Request owns the prompt and its status.
+        claim_receipt(self.transid)
+        if self.transid and frappe.db.sql(
+            # A locking read: it sees the latest committed rows, where a plain read
+            # would use this transaction's older snapshot and miss the row the other
+            # inserter committed while this one waited on the lock.
+            """SELECT name FROM `tabMpesa C2B Payment Register`
+            WHERE transid = %s AND docstatus < 2 LIMIT 1 FOR UPDATE""",
+            (self.transid,),
+        ):
+            raise DuplicateReceiptError(
+                _("M-Pesa receipt {0} is already in the register.").format(self.transid)
+            )
         self.set_missing_values()
 
     def after_insert(self):
