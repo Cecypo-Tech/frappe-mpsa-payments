@@ -297,6 +297,10 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
     # shape assumed at plan time.
     transactions = _flatten_pull_transactions(response.get("Response", []))
 
+    from ..doctype.mpesa_c2b_payment_register.mpesa_c2b_payment_register import (
+        DuplicateReceiptError,
+    )
+
     created, skipped, failed = 0, 0, 0
     created_records = []
     duplicate_transids = []
@@ -326,7 +330,19 @@ def pull_transaction_on_success(response: dict, document_name: str, **kwargs) ->
             doc.businessshortcode = shortcode
             doc.billrefnumber = txn.get("billreference", "")
             doc.transactiontype = txn.get("transactiontype", "")
-            doc.insert(ignore_permissions=True)
+            try:
+                doc.insert(ignore_permissions=True)
+            except DuplicateReceiptError:
+                # The C2B callback recorded it after the check above.
+                duplicate_transids.append(transid)
+                skipped += 1
+                continue
+            except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+                # The database ended this transaction (or another inserter holds the
+                # receipt): every row inserted so far is gone, so the rest of the loop
+                # would report rows that do not exist. Stop; the next pull retries.
+                frappe.db.rollback()
+                raise
 
             created_records.append(
                 {

@@ -2,6 +2,11 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
+from ..doctype.mpesa_c2b_payment_register.mpesa_c2b_payment_register import (
+    drafts_without_twins,
+    live_twin,
+)
+
 
 @frappe.whitelist()
 def get_mpesa_phone_mops_for_pos_profile(pos_profile, company):
@@ -110,7 +115,7 @@ def get_mpesa_payments():
             limit_page_length=200,
         )
         sl = search.lower()
-        for p in rows:
+        for p in drafts_without_twins(rows):
             full_name = (p.get("full_name") or "").lower()
             transid = (p.get("transid") or "").lower()
             billref = (p.get("billrefnumber") or "").lower()
@@ -165,6 +170,14 @@ def process_mpesa():
 
         if mpesa.docstatus != 0:
             continue
+
+        twin = live_twin(mpesa.name)
+        if twin:
+            frappe.throw(
+                _("M-Pesa receipt {0} is already recorded as {1}; {2} is a duplicate copy and cannot be used.").format(
+                    mpesa.transid, twin, mpesa.name
+                )
+            )
 
         meta = _get_mop_meta(mpesa.mode_of_payment)
 
